@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  cloud:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./demo/audio:/app/demo/audio 
+      - ./demo/photos:/app/demo/photos 
+      - yamnet_cache:/tmp/yamnet_cache
+    depends_on:
+      - lora_gateway
+    restart: unless-stopped
+
+  edge:
+    build: .
+    command: python -m edge.server
+    env_file:
+      - .env
+    volumes:
+      - ./demo/audio:/app/demo/audio
+      - yamnet_cache:/tmp/yamnet_cache
+    restart: unless-stopped
+
+  lora_gateway:
+    build: .
+    command: python -m simulator.lora.socket_relay
+    ports:
+      - "9000:9000"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  yamnet_cache:
