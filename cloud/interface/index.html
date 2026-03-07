@@ -150,6 +150,14 @@
                     addEvent('Алерт:', d.text, 'high');
                     break;
 
+                case 'onset_check':
+                    if (d.triggered) {
+                        addEvent('Детекция:', 'Резкий звук обнаружен (x' + d.energy_ratio + ')', 'high');
+                    } else {
+                        addEvent('Детекция:', 'Тишина (x' + d.energy_ratio + ')', 'low');
+                    }
+                    break;
+
                 case 'pipeline_end':
                     addEvent('Готово:', d.reason, 'low');
                     break;

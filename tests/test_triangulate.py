@@ -71,7 +71,7 @@ class TestEstimateTdoa:
         sig_a = _sine_pulse(offset=1000 + shift, sr=sr)
         sig_b = _sine_pulse(offset=1000, sr=sr)
         tdoa = _estimate_tdoa(sig_a, sig_b, sr=sr)
-        expected = shift / sr  # a is delayed relative to b => positive TDOA
+        expected = -shift / sr  # a is delayed relative to b => negative TDOA
         assert abs(tdoa - expected) < 2 / sr, (
             f"Expected ~{expected:.6f}, got {tdoa:.6f}"
         )

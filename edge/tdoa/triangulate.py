@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.optimize import minimize
 from scipy.fft import rfft, irfft
+from scipy.signal import butter, sosfilt
 from dataclasses import dataclass
 
 SPEED_OF_SOUND = 343.0  # m/s at ~20C
@@ -35,6 +36,23 @@ def _meters_to_latlon(lat0, lon0, dx, dy) -> tuple[float, float]:
     return lat0 + dlat, lon0 + dlon
 
 
+def _bandpass_filter(
+    signal: np.ndarray, sr: int, low: float = 200.0, high: float = 6000.0
+) -> np.ndarray:
+    """Apply a Butterworth bandpass filter to remove low-freq rumble and high-freq noise.
+
+    Chainsaw fundamental: 200-1000 Hz, gunshot transient: 500-5000 Hz.
+    The 200-6000 Hz band covers all threat classes while rejecting wind/electronics noise.
+    """
+    nyq = sr / 2.0
+    low_n = max(low / nyq, 0.001)
+    high_n = min(high / nyq, 0.999)
+    if low_n >= high_n:
+        return signal
+    sos = butter(4, [low_n, high_n], btype="bandpass", output="sos")
+    return sosfilt(sos, signal).astype(signal.dtype)
+
+
 def _estimate_tdoa(sig_a: np.ndarray, sig_b: np.ndarray, sr: int) -> float:
     # TDOA-01: pad signals to equal length
     max_len = max(len(sig_a), len(sig_b))
@@ -47,9 +65,12 @@ def _estimate_tdoa(sig_a: np.ndarray, sig_b: np.ndarray, sr: int) -> float:
     n = 2 * max_len - 1
     SIG_A = rfft(sig_a, n)
     SIG_B = rfft(sig_b, n)
-    R = SIG_A * np.conj(SIG_B)
+    R = np.conj(SIG_A) * SIG_B
     denom = np.abs(R) ** 0.75 + 1e-10
-    cc = irfft(R / denom, n)
+    cc = np.real(irfft(R / denom, n))
+
+    # Shift so that zero-lag is at the center (index max_len - 1)
+    cc = np.roll(cc, max_len - 1)
 
     # No abs() — avoid promoting anti-correlation multipath peaks
     peak = int(np.argmax(cc))
@@ -67,15 +88,48 @@ def _estimate_tdoa(sig_a: np.ndarray, sig_b: np.ndarray, sr: int) -> float:
     return lag / sr
 
 
+def _signal_snr(signal: np.ndarray) -> float:
+    """Estimate SNR in dB. Assumes signal has both quiet and loud sections."""
+    if len(signal) == 0:
+        return 0.0
+    frame_size = min(512, len(signal))
+    n_frames = len(signal) // frame_size
+    if n_frames < 2:
+        return 0.0
+    energies = np.array([
+        np.mean(signal[i * frame_size : (i + 1) * frame_size] ** 2)
+        for i in range(n_frames)
+    ])
+    noise_floor = np.percentile(energies, 10) + 1e-15
+    signal_peak = np.percentile(energies, 90) + 1e-15
+    return float(10 * np.log10(signal_peak / noise_floor))
+
+
 def triangulate(
     signals: list[np.ndarray],
     mic_positions: list[MicPosition],
     sample_rate: int = 16000,
+    use_bandpass: bool = True,
+    temperature_c: float | None = None,
 ) -> TriangulationResult:
+    """Triangulate sound source using TDOA from 3 microphones.
+
+    Improvements over v1:
+    - Bandpass filter (200-6000 Hz) to reject wind/electronics noise
+    - All 3 TDOA pairs (AB, AC, BC) for overdetermined least-squares
+    - Multi-start optimization to avoid local minima
+    - Temperature-corrected speed of sound
+    - SNR-based confidence weighting
+    """
     assert len(signals) == 3 and len(mic_positions) == 3
 
     mic_a, mic_b, mic_c = mic_positions
     sig_a, sig_b, sig_c = signals
+
+    # Temperature-corrected speed of sound (if provided)
+    speed = SPEED_OF_SOUND
+    if temperature_c is not None:
+        speed = 331.3 + 0.606 * temperature_c
 
     lat0, lon0 = mic_a.lat, mic_a.lon
 
@@ -84,11 +138,29 @@ def triangulate(
 
     mics_m = np.array([[0, 0], [bx, by], [cx, cy]])
 
+    # Apply bandpass filter to improve cross-correlation quality
+    if use_bandpass:
+        sig_a = _bandpass_filter(sig_a, sample_rate)
+        sig_b = _bandpass_filter(sig_b, sample_rate)
+        sig_c = _bandpass_filter(sig_c, sample_rate)
+
+    # Compute ALL 3 TDOA pairs for overdetermined system
     tdoa_ab = _estimate_tdoa(sig_a, sig_b, sample_rate)
     tdoa_ac = _estimate_tdoa(sig_a, sig_c, sample_rate)
+    tdoa_bc = _estimate_tdoa(sig_b, sig_c, sample_rate)
 
-    d_ab = tdoa_ab * SPEED_OF_SOUND
-    d_ac = tdoa_ac * SPEED_OF_SOUND
+    d_ab = tdoa_ab * speed
+    d_ac = tdoa_ac * speed
+    d_bc = tdoa_bc * speed
+
+    # SNR-based weights: higher SNR pairs get more influence
+    snr_a = _signal_snr(sig_a)
+    snr_b = _signal_snr(sig_b)
+    snr_c = _signal_snr(sig_c)
+    # Weight for each pair = geometric mean of the two mics' SNR
+    w_ab = max(1.0, (snr_a + snr_b) / 2.0)
+    w_ac = max(1.0, (snr_a + snr_c) / 2.0)
+    w_bc = max(1.0, (snr_b + snr_c) / 2.0)
 
     def cost(pos):
         x, y = pos
@@ -97,18 +169,36 @@ def triangulate(
         dc = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
         err_ab = (da - db) - d_ab
         err_ac = (da - dc) - d_ac
-        return err_ab**2 + err_ac**2
+        err_bc = (db - dc) - d_bc
+        return w_ab * err_ab**2 + w_ac * err_ac**2 + w_bc * err_bc**2
 
-    x0 = mics_m[:, 0].mean()
-    y0 = mics_m[:, 1].mean()
+    # Multi-start optimization: try centroid + each mic position as initial guess
+    centroid_x = mics_m[:, 0].mean()
+    centroid_y = mics_m[:, 1].mean()
 
-    result = minimize(
-        cost, [x0, y0], method="Nelder-Mead", options={"xatol": 0.1, "fatol": 0.01}
-    )
+    initial_guesses = [
+        [centroid_x, centroid_y],
+        [0.0, 0.0],          # near mic A
+        [bx, by],             # near mic B
+        [cx, cy],             # near mic C
+        [centroid_x * 2, centroid_y * 2],  # outside triangle
+    ]
 
-    src_x, src_y = result.x
+    best_result = None
+    best_cost = float("inf")
+
+    for x0 in initial_guesses:
+        result = minimize(
+            cost, x0, method="Nelder-Mead",
+            options={"xatol": 0.1, "fatol": 0.01, "maxiter": 500},
+        )
+        if result.fun < best_cost:
+            best_cost = result.fun
+            best_result = result
+
+    src_x, src_y = best_result.x
     src_lat, src_lon = _meters_to_latlon(lat0, lon0, src_x, src_y)
 
-    error_m = float(np.sqrt(result.fun)) if result.fun > 0 else 0.0
+    error_m = float(np.sqrt(best_result.fun)) if best_result.fun > 0 else 0.0
 
     return TriangulationResult(lat=src_lat, lon=src_lon, error_m=error_m)

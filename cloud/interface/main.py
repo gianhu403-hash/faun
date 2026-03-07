@@ -77,6 +77,24 @@ async def start_demo_v1(req: DemoRequest):
 #    See: https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/
 
 
+# ---- Gateway event forwarding ----
+# The LoRa gateway sends processed events (after Yandex GPT) here
+# so they get broadcast to all web dashboard clients via WebSocket.
+
+
+class GatewayEvent(BaseModel):
+    event: str
+    # Allow arbitrary extra fields for different event types
+    model_config = {"extra": "allow"}
+
+
+@app.post("/api/v1/gateway-event")
+async def receive_gateway_event(payload: GatewayEvent):
+    """Receive a processed event from the gateway and broadcast to dashboard."""
+    await broadcast(payload.model_dump())
+    return {"status": "broadcast"}
+
+
 # Legacy endpoint for backward compatibility
 @app.post("/demo/start")
 async def start_demo_legacy(scenario: str = "chainsaw"):
@@ -89,6 +107,7 @@ async def _run_demo(scenario: str):
     from simulator.drone.drone_stream import DroneSimulator
     from simulator.lora.socket_relay import LoraRelay
     from edge.audio.classifier import classify
+    from edge.audio.onset import OnsetDetector
     from edge.tdoa.triangulate import triangulate, MicPosition
     from edge.decision.decider import decide
     from edge.drone.simulated import SimulatedDrone
@@ -125,6 +144,26 @@ async def _run_demo(scenario: str):
 
     mic_sim = MicSimulator(scenario)
     signals, audio_paths = await mic_sim.get_signals()
+
+    # Onset detection — only proceed if sharp sound detected
+    detector = OnsetDetector()
+    onset = detector.detect(signals[0])
+    await broadcast(
+        {
+            "event": "onset_check",
+            "triggered": onset.triggered,
+            "energy_ratio": round(onset.energy_ratio, 2),
+        }
+    )
+
+    if not onset.triggered:
+        await broadcast(
+            {
+                "event": "pipeline_end",
+                "reason": f"no_onset (ratio={onset.energy_ratio:.1f})",
+            }
+        )
+        return
 
     audio_result = classify(audio_paths[0])
     await broadcast(

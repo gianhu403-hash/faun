@@ -1,3 +1,12 @@
+"""LoRa Gateway — receives edge packets, processes via Yandex GPT,
+sends alerts to Telegram AND web dashboard.
+
+Flow:
+  Edge (onset → classify → triangulate) → LoRa → Gateway → Yandex GPT
+    → Telegram (ranger)
+    → Web dashboard (WebSocket broadcast)
+"""
+
 import asyncio
 import json
 import os
@@ -8,6 +17,22 @@ from cloud.notify.telegram import send_confirmed
 
 HOST = os.getenv("LORA_GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.getenv("LORA_GATEWAY_PORT", 9000))
+CLOUD_API_URL = os.getenv("CLOUD_API_URL", "http://cloud:8000")
+
+
+async def _forward_to_dashboard(event: dict) -> None:
+    """Forward a processed alert event to the cloud FastAPI server
+    for WebSocket broadcast to the web dashboard."""
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{CLOUD_API_URL}/api/v1/gateway-event",
+                json=event,
+            )
+    except Exception as e:
+        print(f"Failed to forward event to dashboard: {e}")
 
 
 async def handle_packet(packet: dict) -> None:
@@ -16,12 +41,33 @@ async def handle_packet(packet: dict) -> None:
     print(f"class={packet['class']}  conf={packet['confidence']:.0%}")
     print(f"lat={packet['lat']:.4f}  lon={packet['lon']:.4f}")
 
+    # Notify dashboard: sound detected and localized
+    await _forward_to_dashboard({
+        "event": "audio_classified",
+        "class": packet["class"],
+        "confidence": packet["confidence"],
+    })
+    await _forward_to_dashboard({
+        "event": "location_found",
+        "lat": packet["lat"],
+        "lon": packet["lon"],
+        "error_m": packet.get("error_m", 0.0),
+    })
+
     photo_b64 = packet.get("photo_b64", "")
 
     if photo_b64:
         print("Sending photo to YandexGPT Vision...")
         vision = await classify_photo(photo_b64)
         print(f"   Vision: {vision.description}")
+
+        await _forward_to_dashboard({
+            "event": "vision_classified",
+            "description": vision.description,
+            "has_human": vision.has_human,
+            "has_fire": vision.has_fire,
+            "has_felling": vision.has_felling,
+        })
     else:
         from cloud.vision.classifier import VisionResult
 
@@ -50,7 +96,19 @@ async def handle_packet(packet: dict) -> None:
         photo_bytes = base64.b64decode(photo_b64)
 
     await send_confirmed(alert, photo_bytes)
-    print("Alert sent.\n")
+    print("Alert sent to Telegram.")
+
+    # Forward final alert to web dashboard
+    await _forward_to_dashboard({
+        "event": "alert_sent",
+        "text": alert.text,
+        "priority": alert.priority,
+    })
+    await _forward_to_dashboard({
+        "event": "pipeline_end",
+        "reason": "complete",
+    })
+    print("Alert forwarded to web dashboard.\n")
 
 
 async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
