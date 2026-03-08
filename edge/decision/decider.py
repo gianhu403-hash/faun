@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from edge.audio.classifier import AudioResult, AudioClass
 from edge.tdoa.triangulate import TriangulationResult
+from cloud.db.permits import has_valid_permit
 
 CONFIDENCE_ALERT = 0.70   # >0.70: 95% accuracy -> drone + LoRa
 CONFIDENCE_VERIFY = 0.40  # 0.40-0.70: 49% accuracy -> only LoRa
@@ -17,6 +18,10 @@ PRIORITY_MAP: dict[AudioClass, str] = {
 }
 
 SAFE_CLASSES: set[AudioClass] = {"background"}
+
+# Classes that can be covered by a logging permit (лесной билет).
+# If a valid permit exists at the detected location, these are legal.
+PERMIT_CLASSES: set[AudioClass] = {"chainsaw", "axe", "engine"}
 
 
 @dataclass
@@ -42,6 +47,20 @@ def decide(audio: AudioResult, location: TriangulationResult) -> Decision:
             send_lora=False,
             priority="low",
             reason=f"Log only: {audio.label} ({audio.confidence:.0%} < {CONFIDENCE_VERIFY:.0%})",
+        )
+
+    # Check logging permits for classes that could be legal forestry work
+    if audio.label in PERMIT_CLASSES and has_valid_permit(location.lat, location.lon):
+        return Decision(
+            send_drone=False,
+            send_lora=False,
+            priority="low",
+            reason=(
+                f"Permitted activity: {audio.label} "
+                f"({audio.confidence:.0%} confidence) "
+                f"at {location.lat:.4f}°N {location.lon:.4f}°E — "
+                f"valid logging permit found"
+            ),
         )
 
     priority = PRIORITY_MAP.get(audio.label, "medium")
