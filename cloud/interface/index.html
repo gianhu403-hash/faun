@@ -310,6 +310,7 @@
         var incident = {};
         var mapLayers = [];
         var droneMarker = null;
+        var activeMics = [];
 
         /* ---- Helpers ---- */
         function escHtml(s) {
@@ -330,6 +331,15 @@
             return n.getHours().toString().padStart(2,'0') + ':' +
                    n.getMinutes().toString().padStart(2,'0') + ':' +
                    n.getSeconds().toString().padStart(2,'0');
+        }
+
+        function haversine(lat1, lon1, lat2, lon2) {
+            var R = 6371000;
+            var p1 = lat1 * Math.PI / 180, p2 = lat2 * Math.PI / 180;
+            var dp = (lat2 - lat1) * Math.PI / 180;
+            var dl = (lon2 - lon1) * Math.PI / 180;
+            var a = Math.sin(dp/2)*Math.sin(dp/2) + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         }
 
         function confBar(conf) {
@@ -594,6 +604,7 @@
         function handleEvent(d) {
             switch (d.event) {
                 case 'mic_active': {
+                    activeMics = d.mics || [];
                     if (d.mics) {
                         d.mics.forEach(function(m, i) {
                             var icon = L.divIcon({
@@ -645,6 +656,20 @@
                         fillOpacity: 0.12, weight: 1, dashArray: '4 4'
                     }).addTo(map);
                     mapLayers.push(circle);
+
+                    // TDOA visualization: radius circles + lines from each active mic
+                    activeMics.forEach(function(m) {
+                        var dist = haversine(m.lat, m.lon, d.lat, d.lon);
+                        var rc = L.circle([m.lat, m.lon], {
+                            radius: dist, color: '#3b82f6', fillColor: 'transparent',
+                            weight: 1, dashArray: '6 4', opacity: 0.5
+                        }).addTo(map);
+                        mapLayers.push(rc);
+                        var ln = L.polyline([[m.lat, m.lon], [d.lat, d.lon]], {
+                            color: '#3b82f6', weight: 1, dashArray: '4 4', opacity: 0.4
+                        }).addTo(map);
+                        mapLayers.push(ln);
+                    });
 
                     var locIcon = L.divIcon({
                         html: '<div style="width:12px;height:12px;border-radius:50%;border:2px solid #ff2020;background:transparent;"></div>',
@@ -753,6 +778,7 @@
         window.startDemo = function(scenario) {
             clearIncidentLayers();
             incident = {};
+            activeMics = [];
 
             sidebar.textContent = '';
             var empty = document.createElement('div');

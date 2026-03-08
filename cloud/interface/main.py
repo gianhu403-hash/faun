@@ -652,7 +652,7 @@ async def _run_demo(
     from simulator.drone.drone_stream import DroneSimulator
     from simulator.lora.socket_relay import LoraRelay
     from edge.audio.classifier import classify
-    from edge.audio.onset import OnsetDetector
+    from edge.audio.onset import detect_onset as detect_onset_fn
     from edge.tdoa.triangulate import triangulate, MicPosition
     from edge.decision.decider import decide
     from edge.drone.simulated import SimulatedDrone
@@ -715,9 +715,8 @@ async def _run_demo(
     )
     signals, audio_paths = await mic_sim.get_signals()
 
-    # Onset detection — only proceed if sharp sound detected
-    detector = OnsetDetector()
-    onset = detector.detect(signals[0])
+    # Onset detection — pre-filled quiet baseline so gunshot/engine also trigger
+    onset = detect_onset_fn(signals[0])
     await broadcast(
         {
             "event": "onset_check",
