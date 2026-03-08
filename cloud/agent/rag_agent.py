@@ -1,12 +1,13 @@
-"""RAG agent — File Search + Web Search via Yandex AI Studio.
+"""RAG agent — legal assistant via Yandex AI Studio.
 
-Uses YandexGPT with tools (file_search, web_search) when SEARCH_INDEX_ID
-is configured. Falls back to plain YandexGPT completion otherwise.
+Uses YandexGPT completion API for legal advice on forest violations.
+When SEARCH_INDEX_ID is available, uses Assistants API (SDK) for
+File Search over legal documents. Falls back to plain completion.
 
 Environment variables:
   YANDEX_API_KEY      — API key for Yandex Cloud
   YANDEX_FOLDER_ID    — Yandex Cloud folder ID
-  SEARCH_INDEX_ID     — File Search index ID (optional, enables RAG)
+  SEARCH_INDEX_ID     — File Search index ID (optional, enables RAG via SDK)
 """
 
 import os
@@ -48,51 +49,35 @@ CLASS_CONTEXT = {
 }
 
 
-async def _call_yandex_with_tools(prompt: str) -> str:
-    """Call YandexGPT with File Search and Web Search tools."""
-    tools = []
+async def _call_yandex_with_sdk(prompt: str) -> str:
+    """Call YandexGPT via SDK with File Search (Assistants API)."""
+    try:
+        from yandex_ai_studio_sdk import AIStudio
 
-    if SEARCH_INDEX_ID:
-        tools.append(
-            {
-                "type": "file_search",
-                "file_search": {
-                    "search_index_ids": [SEARCH_INDEX_ID],
-                    "max_num_results": 5,
-                },
-            }
+        sdk = AIStudio(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_API_KEY)
+        search_index = sdk.search_indexes.get(SEARCH_INDEX_ID)
+        tool = sdk.tools.search_index(search_index)
+
+        assistant = sdk.assistants.create(
+            "yandexgpt",
+            tools=[tool],
+            instruction=SYSTEM_PROMPT,
         )
+        thread = sdk.threads.create()
+        thread.write(prompt)
+        run = assistant.run(thread)
+        result = run.wait(poll_interval=0.5)
+        answer = result.text
 
-    tools.append({"type": "web_search", "web_search": {}})
-
-    body = {
-        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt",
-        "completionOptions": {
-            "stream": False,
-            "temperature": 0.2,
-            "maxTokens": 500,
-        },
-        "messages": [
-            {"role": "system", "text": SYSTEM_PROMPT},
-            {"role": "user", "text": prompt},
-        ],
-    }
-
-    if tools:
-        body["tools"] = tools
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            API_URL,
-            headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
-            json=body,
-        )
-
-    if resp.status_code != 200:
-        logger.error("YandexGPT RAG error %s: %s", resp.status_code, resp.text)
-        return _fallback_response(prompt)
-
-    return resp.json()["result"]["alternatives"][0]["message"]["text"]
+        thread.delete()
+        assistant.delete()
+        return answer
+    except ImportError:
+        logger.warning("yandex_ai_studio_sdk not installed, falling back to plain API")
+        return await _call_yandex_plain(prompt)
+    except Exception as e:
+        logger.error("SDK RAG error: %s", e)
+        return await _call_yandex_plain(prompt)
 
 
 async def _call_yandex_plain(prompt: str) -> str:
@@ -147,7 +132,7 @@ async def query_action(audio_class: str, lat: float, lon: float) -> str:
     )
 
     if SEARCH_INDEX_ID:
-        return await _call_yandex_with_tools(prompt)
+        return await _call_yandex_with_sdk(prompt)
     return await _call_yandex_plain(prompt)
 
 
@@ -163,7 +148,7 @@ async def query_protocol(audio_class: str, lat: float, lon: float) -> str:
     )
 
     if SEARCH_INDEX_ID:
-        return await _call_yandex_with_tools(prompt)
+        return await _call_yandex_with_sdk(prompt)
     return await _call_yandex_plain(prompt)
 
 
@@ -174,5 +159,5 @@ async def query_rag(question: str, context: str = "") -> str:
         prompt = f"Контекст: {context}\n\nВопрос: {question}"
 
     if SEARCH_INDEX_ID:
-        return await _call_yandex_with_tools(prompt)
+        return await _call_yandex_with_sdk(prompt)
     return await _call_yandex_plain(prompt)
