@@ -1,9 +1,9 @@
 """Telegram notifications — zone-based routing to rangers.
 
-Instead of sending to a single hardcoded CHAT_ID, we query the ranger
-database and send alerts ONLY to rangers whose zone covers the event
-coordinates. If no rangers are found for a location, falls back to
-TELEGRAM_CHAT_ID from env (admin/default channel).
+Alerts are sent ONLY to rangers whose zone covers the event coordinates.
+If no rangers cover the location, the alert is logged but NOT sent
+to any fallback chat — this prevents spamming the admin with every
+detection in uncovered areas.
 """
 
 import os
@@ -17,18 +17,16 @@ from cloud.db.rangers import get_rangers_for_location, Ranger
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-FALLBACK_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 def _get_target_chat_ids(lat: float, lon: float) -> list[int]:
-    """Get chat IDs of rangers responsible for this location."""
+    """Get chat IDs of rangers responsible for this location.
+
+    Returns ONLY rangers whose zone covers the coordinates.
+    If no rangers match, returns empty list (no fallback spam).
+    """
     rangers = get_rangers_for_location(lat, lon)
-    if rangers:
-        return [r.chat_id for r in rangers]
-    # Fallback: if no rangers in DB or none cover this zone, use env default
-    if FALLBACK_CHAT_ID:
-        return [int(FALLBACK_CHAT_ID)]
-    return []
+    return [r.chat_id for r in rangers]
 
 
 async def send_pending(lat: float, lon: float, audio_class: str, reason: str) -> None:
@@ -44,6 +42,12 @@ async def send_pending(lat: float, lon: float, audio_class: str, reason: str) ->
     )
 
     chat_ids = _get_target_chat_ids(lat, lon)
+    if not chat_ids:
+        logger.info(
+            "No rangers cover %.4f°N %.4f°E — pending alert not sent", lat, lon
+        )
+        return
+
     for chat_id in chat_ids:
         try:
             await bot.send_message(
@@ -68,6 +72,13 @@ async def send_confirmed(alert: Alert, photo_bytes: bytes | None) -> None:
     )
 
     chat_ids = _get_target_chat_ids(alert.lat, alert.lon)
+    if not chat_ids:
+        logger.info(
+            "No rangers cover %.4f°N %.4f°E — confirmed alert not sent",
+            alert.lat, alert.lon,
+        )
+        return
+
     for chat_id in chat_ids:
         try:
             if photo_bytes:
