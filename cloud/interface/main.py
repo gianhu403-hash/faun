@@ -1,12 +1,28 @@
 import asyncio
 import json
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from cloud.notify.bot_app import start_bot, stop_bot
 
-app = FastAPI(title="ForestGuard")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        await start_bot()
+    except Exception:
+        logger.exception("Failed to start Telegram bot polling")
+    yield
+    await stop_bot()
+
+
+app = FastAPI(title="ForestGuard", lifespan=lifespan)
 
 FRONTEND_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
@@ -77,6 +93,218 @@ async def start_demo_v1(req: DemoRequest):
 #    See: https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/
 
 
+# ---- Ranger management API ----
+
+from cloud.db.rangers import (
+    add_ranger,
+    remove_ranger,
+    get_all_rangers,
+    get_ranger_by_chat_id,
+    update_zone,
+    set_active,
+)
+
+
+class RangerCreate(BaseModel):
+    name: str
+    chat_id: int
+    zone_lat_min: float
+    zone_lat_max: float
+    zone_lon_min: float
+    zone_lon_max: float
+
+
+class RangerZoneUpdate(BaseModel):
+    lat_min: float
+    lat_max: float
+    lon_min: float
+    lon_max: float
+
+
+@app.get("/api/v1/rangers")
+async def list_rangers():
+    """List all registered rangers."""
+    rangers = get_all_rangers()
+    return [
+        {
+            "id": r.id,
+            "name": r.name,
+            "chat_id": r.chat_id,
+            "zone": {
+                "lat_min": r.zone_lat_min,
+                "lat_max": r.zone_lat_max,
+                "lon_min": r.zone_lon_min,
+                "lon_max": r.zone_lon_max,
+            },
+            "active": r.active,
+        }
+        for r in rangers
+    ]
+
+
+@app.post("/api/v1/rangers")
+async def create_ranger(req: RangerCreate):
+    """Register a new ranger with their monitoring zone."""
+    ranger = add_ranger(
+        name=req.name,
+        chat_id=req.chat_id,
+        zone_lat_min=req.zone_lat_min,
+        zone_lat_max=req.zone_lat_max,
+        zone_lon_min=req.zone_lon_min,
+        zone_lon_max=req.zone_lon_max,
+    )
+    return {"status": "created", "id": ranger.id, "name": ranger.name}
+
+
+@app.delete("/api/v1/rangers/{chat_id}")
+async def delete_ranger(chat_id: int):
+    """Remove a ranger by their Telegram chat ID."""
+    removed = remove_ranger(chat_id)
+    if not removed:
+        return {"status": "not_found"}
+    return {"status": "removed"}
+
+
+@app.patch("/api/v1/rangers/{chat_id}/zone")
+async def update_ranger_zone(chat_id: int, req: RangerZoneUpdate):
+    """Update a ranger's monitoring zone."""
+    updated = update_zone(chat_id, req.lat_min, req.lat_max, req.lon_min, req.lon_max)
+    if not updated:
+        return {"status": "not_found"}
+    return {"status": "updated"}
+
+
+@app.patch("/api/v1/rangers/{chat_id}/active")
+async def toggle_ranger_active(chat_id: int, active: bool = True):
+    """Enable or disable alerts for a ranger."""
+    updated = set_active(chat_id, active)
+    if not updated:
+        return {"status": "not_found"}
+    return {"status": "active" if active else "inactive"}
+
+
+# ---- Permits (лесные билеты) API ----
+
+from datetime import date
+from cloud.db.permits import (
+    add_permit as db_add_permit,
+    remove_permit as db_remove_permit,
+    get_all_permits,
+    get_permits_for_location,
+    has_valid_permit,
+)
+
+
+class PermitCreate(BaseModel):
+    zone_lat_min: float
+    zone_lat_max: float
+    zone_lon_min: float
+    zone_lon_max: float
+    valid_from: date
+    valid_until: date
+    description: str = ""
+
+
+class PermitCheck(BaseModel):
+    lat: float
+    lon: float
+
+
+@app.get("/api/v1/permits")
+async def list_permits():
+    """List all logging permits."""
+    permits = get_all_permits()
+    return [
+        {
+            "id": p.id,
+            "description": p.description,
+            "zone": {
+                "lat_min": p.zone_lat_min,
+                "lat_max": p.zone_lat_max,
+                "lon_min": p.zone_lon_min,
+                "lon_max": p.zone_lon_max,
+            },
+            "valid_from": p.valid_from.isoformat(),
+            "valid_until": p.valid_until.isoformat(),
+        }
+        for p in permits
+    ]
+
+
+@app.post("/api/v1/permits")
+async def create_permit(req: PermitCreate):
+    """Register a new logging permit."""
+    permit = db_add_permit(
+        zone_lat_min=req.zone_lat_min,
+        zone_lat_max=req.zone_lat_max,
+        zone_lon_min=req.zone_lon_min,
+        zone_lon_max=req.zone_lon_max,
+        valid_from=req.valid_from,
+        valid_until=req.valid_until,
+        description=req.description,
+    )
+    return {"status": "created", "id": permit.id}
+
+
+@app.delete("/api/v1/permits/{permit_id}")
+async def delete_permit(permit_id: int):
+    """Remove a logging permit."""
+    removed = db_remove_permit(permit_id)
+    if not removed:
+        return {"status": "not_found"}
+    return {"status": "removed"}
+
+
+@app.post("/api/v1/permits/check")
+async def check_permit(req: PermitCheck):
+    """Check if a location is covered by a valid permit."""
+    has_permit = has_valid_permit(req.lat, req.lon)
+    permits = get_permits_for_location(req.lat, req.lon)
+    return {
+        "has_valid_permit": has_permit,
+        "permits": [{"id": p.id, "description": p.description} for p in permits],
+    }
+
+
+# ---- RAG query API ----
+
+from cloud.agent.rag_agent import query_rag
+
+
+class RagQueryRequest(BaseModel):
+    question: str
+    context: str = ""
+
+
+class RagQueryResponse(BaseModel):
+    answer: str
+
+
+@app.post("/api/v1/rag-query", response_model=RagQueryResponse)
+async def rag_query_endpoint(req: RagQueryRequest):
+    """Query RAG agent with File Search + Web Search (Yandex AI Studio)."""
+    answer = await query_rag(req.question, req.context)
+    return RagQueryResponse(answer=answer)
+
+
+# ---- Gateway event forwarding ----
+# The LoRa gateway sends processed events (after Yandex GPT) here
+# so they get broadcast to all web dashboard clients via WebSocket.
+
+
+class GatewayEvent(BaseModel):
+    event: str
+    # Allow arbitrary extra fields for different event types
+    model_config = {"extra": "allow"}
+
+
+@app.post("/api/v1/gateway-event")
+async def receive_gateway_event(payload: GatewayEvent):
+    """Receive a processed event from the gateway and broadcast to dashboard."""
+    await broadcast(payload.model_dump())
+    return {"status": "broadcast"}
+
+
 # Legacy endpoint for backward compatibility
 @app.post("/demo/start")
 async def start_demo_legacy(scenario: str = "chainsaw"):
@@ -89,6 +317,7 @@ async def _run_demo(scenario: str):
     from simulator.drone.drone_stream import DroneSimulator
     from simulator.lora.socket_relay import LoraRelay
     from edge.audio.classifier import classify
+    from edge.audio.onset import OnsetDetector
     from edge.tdoa.triangulate import triangulate, MicPosition
     from edge.decision.decider import decide
     from edge.drone.simulated import SimulatedDrone
@@ -125,6 +354,26 @@ async def _run_demo(scenario: str):
 
     mic_sim = MicSimulator(scenario)
     signals, audio_paths = await mic_sim.get_signals()
+
+    # Onset detection — only proceed if sharp sound detected
+    detector = OnsetDetector()
+    onset = detector.detect(signals[0])
+    await broadcast(
+        {
+            "event": "onset_check",
+            "triggered": onset.triggered,
+            "energy_ratio": round(onset.energy_ratio, 2),
+        }
+    )
+
+    if not onset.triggered:
+        await broadcast(
+            {
+                "event": "pipeline_end",
+                "reason": f"no_onset (ratio={onset.energy_ratio:.1f})",
+            }
+        )
+        return
 
     audio_result = classify(audio_paths[0])
     await broadcast(
@@ -172,9 +421,16 @@ async def _run_demo(scenario: str):
         await broadcast({"event": "drone_photo", "drone_b64": photo.b64})
         return photo
 
-    photo, _ = await asyncio.gather(
+    # send_pending creates an Incident and returns it
+    photo, incident = await asyncio.gather(
         drone_task(),
-        send_pending(location.lat, location.lon, audio_result.label, decision.reason),
+        send_pending(
+            location.lat,
+            location.lon,
+            audio_result.label,
+            decision.reason,
+            confidence=audio_result.confidence,
+        ),
     )
 
     vision_result = await classify_photo(photo.b64)
@@ -195,7 +451,8 @@ async def _run_demo(scenario: str):
         lon=location.lon,
         confidence=audio_result.confidence,
     )
-    await send_confirmed(alert, photo.data)
+    # Store drone photo in incident (sent to ranger after accept)
+    await send_confirmed(alert, photo.data, incident=incident)
     await broadcast(
         {"event": "alert_sent", "text": alert.text, "priority": alert.priority}
     )
