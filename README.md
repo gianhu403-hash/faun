@@ -15,5 +15,3 @@ cloud (порт 8000) — основной сервер. При старте:
 Запускает Telegram-бота (polling)
 Поднимает FastAPI с WebSocket для дашборда, REST API для аналитики, управления инспекторами, демо-сценариев и RAG-запросов
 docker-compose up --build
-
-После старта: дашборд на http://localhost:8000, аналитика на http://localhost:8000/analytics.
