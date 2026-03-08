@@ -181,16 +181,25 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def test_alert(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /test — send a demo alert to current chat for testing buttons."""
+    """Handle /test — send a demo alert with random Varnavino coordinates."""
+    import random
+
     chat_id = update.effective_chat.id
+    # Random coordinates within Varnavino forestry district
+    lat = round(random.uniform(57.05, 57.55), 6)
+    lon = round(random.uniform(44.60, 45.40), 6)
+    classes = ["chainsaw", "gunshot", "engine", "axe"]
+    audio_class = random.choice(classes)
+    confidence = round(random.uniform(0.65, 0.98), 2)
+
     await update.message.reply_text("Отправляю тестовый алерт...")
     await send_pending_to_chat(
         chat_id=chat_id,
-        lat=55.7512,
-        lon=37.6135,
-        audio_class="chainsaw",
+        lat=lat,
+        lon=lon,
+        audio_class=audio_class,
         reason="Test alert",
-        confidence=0.92,
+        confidence=confidence,
         gating_level="alert",
     )
 

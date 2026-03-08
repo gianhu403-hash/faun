@@ -330,7 +330,7 @@ async def ai_studio_stack():
     return {
         "integrations": [
             {
-                "service": "YandexGPT Pro 5",
+                "service": "YandexGPT",
                 "usage": "Alert composition, legal text generation",
             },
             {
@@ -376,6 +376,216 @@ async def receive_gateway_event(payload: GatewayEvent):
     """Receive a processed event from the gateway and broadcast to dashboard."""
     await broadcast(payload.model_dump())
     return {"status": "broadcast"}
+
+
+# ---- Microphone network API ----
+
+from cloud.db.microphones import (
+    seed_microphones,
+    get_all as mic_get_all,
+    get_online as mic_get_online,
+    get_by_uid as mic_get_by_uid,
+    set_status as mic_set_status,
+    set_battery as mic_set_battery,
+)
+
+# Seed microphones on startup
+seed_microphones()
+
+
+class MicStatusUpdate(BaseModel):
+    status: str  # online, offline, broken
+
+
+class MicBatteryUpdate(BaseModel):
+    battery_pct: float
+
+
+@app.get("/api/v1/mics")
+async def list_mics():
+    """List all microphones in the network."""
+    mics = mic_get_all()
+    return [
+        {
+            "mic_uid": m.mic_uid,
+            "lat": m.lat,
+            "lon": m.lon,
+            "zone_type": m.zone_type,
+            "sub_district": m.sub_district,
+            "status": m.status,
+            "battery_pct": m.battery_pct,
+            "installed_at": m.installed_at,
+        }
+        for m in mics
+    ]
+
+
+@app.get("/api/v1/mics/online")
+async def list_mics_online():
+    """List only online microphones."""
+    mics = mic_get_online()
+    return [
+        {"mic_uid": m.mic_uid, "lat": m.lat, "lon": m.lon, "zone_type": m.zone_type}
+        for m in mics
+    ]
+
+
+@app.patch("/api/v1/mics/{mic_uid}/status")
+async def update_mic_status(mic_uid: str, req: MicStatusUpdate):
+    """Update microphone status."""
+    ok = mic_set_status(mic_uid, req.status)
+    if not ok:
+        return {"status": "not_found"}
+    return {"status": "updated", "mic_uid": mic_uid, "new_status": req.status}
+
+
+@app.patch("/api/v1/mics/{mic_uid}/battery")
+async def update_mic_battery(mic_uid: str, req: MicBatteryUpdate):
+    """Update microphone battery percentage."""
+    ok = mic_set_battery(mic_uid, req.battery_pct)
+    if not ok:
+        return {"status": "not_found"}
+    return {"status": "updated", "mic_uid": mic_uid, "battery_pct": req.battery_pct}
+
+
+# ---- DataLens JSON endpoints ----
+
+from cloud.analytics.datalens import get_datalens_incidents, get_datalens_stats
+
+
+@app.get("/api/v1/datalens/incidents")
+async def datalens_incidents():
+    """JSON incidents data for DataLens API connector."""
+    return get_datalens_incidents()
+
+
+@app.get("/api/v1/datalens/stats")
+async def datalens_stats():
+    """Aggregated statistics for DataLens dashboard."""
+    return get_datalens_stats()
+
+
+# ---- Classification agent ----
+
+from cloud.agent.classification_agent import verify_classification
+
+
+class ClassifyAgentRequest(BaseModel):
+    audio_class: str
+    confidence: float
+    lat: float
+    lon: float
+    zone_type: str = "exploitation"
+    ndsi: float | None = None
+
+
+@app.post("/api/v1/agent/classify")
+async def classify_agent(req: ClassifyAgentRequest):
+    """Real-time classification verification via AI Studio agent."""
+    result = await verify_classification(
+        audio_class=req.audio_class,
+        confidence=req.confidence,
+        lat=req.lat,
+        lon=req.lon,
+        zone_type=req.zone_type,
+        ndsi=req.ndsi,
+    )
+    return {
+        "verified_class": result.verified_class,
+        "confidence": result.confidence,
+        "priority": result.priority,
+        "context_analysis": result.context_analysis,
+        "recommended_action": result.recommended_action,
+        "permit_status": result.permit_status,
+    }
+
+
+# ---- FGIS-LK endpoints (stub) ----
+
+from cloud.integrations.fgis_lk import fgis_client, ViolationReport
+
+
+class ViolationSubmit(BaseModel):
+    incident_id: str
+    audio_class: str
+    lat: float
+    lon: float
+    confidence: float
+    ranger_name: str = ""
+    description: str = ""
+
+
+@app.get("/api/v1/fgis-lk/forest-unit")
+async def fgis_forest_unit(lat: float, lon: float):
+    """Look up forest quarter by coordinates (FGIS-LK stub)."""
+    unit = fgis_client.get_forest_unit(lat, lon)
+    return {
+        "quarter_number": unit.quarter_number,
+        "sub_district": unit.sub_district,
+        "species_composition": unit.species_composition,
+        "zone_type": unit.zone_type,
+        "area_ha": unit.area_ha,
+    }
+
+
+@app.get("/api/v1/fgis-lk/permits")
+async def fgis_permits(lat: float, lon: float):
+    """Get active felling permits for location (FGIS-LK stub)."""
+    permits = fgis_client.get_active_permits(lat, lon)
+    return [
+        {
+            "permit_id": p.permit_id,
+            "felling_type": p.felling_type,
+            "volume_m3": p.volume_m3,
+            "contractor": p.contractor,
+            "valid_from": p.valid_from.isoformat(),
+            "valid_until": p.valid_until.isoformat(),
+        }
+        for p in permits
+    ]
+
+
+@app.post("/api/v1/fgis-lk/violation")
+async def fgis_violation(req: ViolationSubmit):
+    """Submit violation report to FGIS-LK (stub)."""
+    report = ViolationReport(
+        incident_id=req.incident_id,
+        audio_class=req.audio_class,
+        lat=req.lat,
+        lon=req.lon,
+        confidence=req.confidence,
+        ranger_name=req.ranger_name,
+        description=req.description,
+        timestamp="",
+    )
+    result = fgis_client.submit_violation(report)
+    return result
+
+
+# ---- Workflow endpoints ----
+
+from cloud.workflows.pipeline import get_pipeline_definition
+from cloud.workflows.yandex_workflows import register_workflow, run_workflow
+
+
+@app.get("/api/v1/workflow/definition")
+async def workflow_definition():
+    """Return the full pipeline definition as JSON."""
+    return get_pipeline_definition()
+
+
+class WorkflowRunRequest(BaseModel):
+    scenario: str = "chainsaw"
+
+
+@app.post("/api/v1/workflow/run")
+async def workflow_run(req: WorkflowRunRequest):
+    """Run the incident processing pipeline via WorkflowExecutor."""
+    reg = await register_workflow()
+    result = await run_workflow(reg["workflow_id"], {"scenario": req.scenario})
+    # Also trigger the demo pipeline
+    asyncio.create_task(_run_demo(req.scenario))
+    return result
 
 
 # Legacy endpoint for backward compatibility

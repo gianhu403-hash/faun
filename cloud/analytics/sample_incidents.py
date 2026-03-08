@@ -21,11 +21,22 @@ STATUS_WEIGHTS = [0.60, 0.25, 0.15]
 GATING_LEVELS = ["alert", "verify", "log"]
 
 DISTRICTS = [
-    "Varnavino",
-    "Vetluga",
-    "Krasnye Baki",
-    "Shakhunya",
-    "Tonkino",
+    "Мдальское",
+    "Семёнборское",
+    "Поплывинское",
+    "Каменниковское",
+    "Варнавинское",
+    "Колесниковское",
+    "Камешное",
+    "Кайское",
+]
+
+RANGER_NAMES = [
+    "Козлов А.С.",
+    "Петров И.В.",
+    "Сидорова Е.М.",
+    "Васильев Д.А.",
+    "Кузнецов П.Н.",
 ]
 
 # Varnavino forestry zone bounding box
@@ -69,6 +80,19 @@ def generate_incidents(n: int = NUM_INCIDENTS) -> list[dict]:
         if cls == "background":
             status = "false_alarm"
 
+        if status == "resolved":
+            response_time = random.randint(8, 90)
+            ranger_name = random.choice(RANGER_NAMES)
+            resolution = "Протокол составлен, материалы переданы"
+        elif status == "false_alarm":
+            response_time = random.randint(5, 45)
+            ranger_name = random.choice(RANGER_NAMES)
+            resolution = "Ложное срабатывание, закрыто"
+        else:
+            response_time = None
+            ranger_name = None
+            resolution = "Ожидает реакции"
+
         rows.append(
             {
                 "id": i,
@@ -80,6 +104,9 @@ def generate_incidents(n: int = NUM_INCIDENTS) -> list[dict]:
                 "gating_level": _gating_for_confidence(conf),
                 "status": status,
                 "district": random.choice(DISTRICTS),
+                "response_time_min": response_time,
+                "ranger_name": ranger_name,
+                "resolution_details": resolution,
             }
         )
     return rows

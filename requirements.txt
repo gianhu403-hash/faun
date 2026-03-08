@@ -17,4 +17,6 @@ pydantic>=2.0
 yandex-ai-studio-sdk>=0.3
 fpdf2>=2.7
 
+ydb>=3.0
+
 pytest>=7.4
