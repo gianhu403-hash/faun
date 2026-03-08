@@ -287,6 +287,79 @@ async def rag_query_endpoint(req: RagQueryRequest):
     return RagQueryResponse(answer=answer)
 
 
+# ---- DataSphere cloud classification (2-tier) ----
+
+from cloud.agent.datasphere_client import classify_embeddings
+
+
+class ClassifyRequest(BaseModel):
+    embeddings: list[float]
+
+
+@app.post("/api/v1/classify")
+async def classify_cloud(req: ClassifyRequest):
+    """Cloud classification via DataSphere Node (2-tier verification)."""
+    result = await classify_embeddings(req.embeddings)
+    if result is None:
+        return {"status": "unavailable", "message": "DataSphere Node not configured"}
+    return {"status": "ok", **result}
+
+
+# ---- DataLens: incidents export ----
+
+from fastapi.responses import PlainTextResponse
+from cloud.analytics.sample_incidents import get_incidents_csv_text
+
+
+@app.get("/api/v1/incidents/export", response_class=PlainTextResponse)
+async def export_incidents_csv():
+    """Export incidents as CSV for DataLens integration."""
+    return PlainTextResponse(
+        content=get_incidents_csv_text(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=incidents.csv"},
+    )
+
+
+# ---- AI Studio stack info ----
+
+
+@app.get("/api/v1/ai-studio-stack")
+async def ai_studio_stack():
+    """Show all Yandex Cloud AI Studio integrations used."""
+    return {
+        "integrations": [
+            {
+                "service": "YandexGPT Pro 5",
+                "usage": "Alert composition, legal text generation",
+            },
+            {
+                "service": "AI Studio Assistants API",
+                "usage": "RAG agent with File Search",
+            },
+            {
+                "service": "File Search (RAG)",
+                "usage": "Legal knowledge base (9 normative docs)",
+            },
+            {
+                "service": "Web Search",
+                "usage": "Real-time legal updates from consultant.ru/garant.ru",
+            },
+            {"service": "SpeechKit STT", "usage": "Voice message transcription"},
+            {"service": "YandexGPT Vision", "usage": "Drone photo analysis"},
+            {
+                "service": "DataSphere",
+                "usage": "ML model training & deployment (YAMNet)",
+            },
+            {"service": "DataLens", "usage": "Analytics dashboard for management"},
+            {
+                "service": "Yandex Workflows",
+                "usage": "Incident processing pipeline orchestration",
+            },
+        ]
+    }
+
+
 # ---- Gateway event forwarding ----
 # The LoRa gateway sends processed events (after Yandex GPT) here
 # so they get broadcast to all web dashboard clients via WebSocket.

@@ -38,7 +38,7 @@ async def classify_photo(photo_b64: str) -> VisionResult:
             API_URL,
             headers={"Authorization": f"Api-Key {YANDEX_API_KEY}"},
             json={
-                "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-vision-lite",
+                "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest",
                 "completionOptions": {"temperature": 0.1},
                 "messages": [
                     {
