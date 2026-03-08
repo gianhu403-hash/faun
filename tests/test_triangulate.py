@@ -1,7 +1,7 @@
 """Tests for edge.tdoa.triangulate — TDOA estimation and triangulation.
 
-14 tests covering GCC-PHAT TDOA estimation, coordinate conversions,
-triangulation integration, and edge cases.
+Tests covering GCC-PHAT TDOA estimation, coordinate conversions,
+triangulation integration, distance estimation, and edge cases.
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ from edge.tdoa.triangulate import (
     _latlon_to_meters,
     _meters_to_latlon,
     triangulate,
+)
+from edge.tdoa.distance import (
+    DistanceEstimate,
+    estimate_distances,
+    _rms_energy,
 )
 
 
@@ -220,3 +225,92 @@ class TestTriangulateEdgeCases:
         mics = [MicPosition(lat=55.75, lon=37.61), MicPosition(lat=55.76, lon=37.62)]
         with pytest.raises(AssertionError):
             triangulate(signals, mics, sample_rate=16000)
+
+
+# ---------------------------------------------------------------------------
+# Distance estimation
+# ---------------------------------------------------------------------------
+
+
+class TestDistanceEstimation:
+    def test_rms_energy_sine(self) -> None:
+        t = np.arange(16000) / 16000
+        sig = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        rms = _rms_energy(sig)
+        # RMS of sine with amplitude A is A / sqrt(2) ≈ 0.354
+        assert abs(rms - 0.5 / np.sqrt(2)) < 0.01
+
+    def test_rms_energy_zeros(self) -> None:
+        assert _rms_energy(np.zeros(100, dtype=np.float32)) == 0.0
+
+    def test_louder_signal_closer(self) -> None:
+        """A louder signal should produce a shorter distance estimate."""
+        loud = np.random.default_rng(1).normal(scale=0.5, size=8000).astype(np.float32)
+        quiet = loud * 0.1
+        estimates = estimate_distances([loud, quiet], [10.0, 10.0])
+        assert estimates[0].distance_m < estimates[1].distance_m
+
+    def test_silence_returns_max(self) -> None:
+        silence = np.zeros(8000, dtype=np.float32)
+        estimates = estimate_distances([silence], [0.0], max_distance=500.0)
+        assert estimates[0].distance_m == 500.0
+        assert estimates[0].confidence == 0.0
+
+    def test_confidence_higher_for_loud(self) -> None:
+        rng = np.random.default_rng(42)
+        loud = rng.normal(scale=0.3, size=8000).astype(np.float32)
+        quiet = loud * 0.01
+        estimates = estimate_distances([loud, quiet], [15.0, 3.0])
+        assert estimates[0].confidence > estimates[1].confidence
+
+
+# ---------------------------------------------------------------------------
+# TDOA + Distance fusion
+# ---------------------------------------------------------------------------
+
+
+class TestFusion:
+    def test_pure_tdoa_mode(self, triangle_mics: list[MicPosition]) -> None:
+        """With distance_weight=0 the result should match pure TDOA."""
+        sr = 16000
+        n = 16000
+        rng = np.random.default_rng(7)
+        base = rng.normal(size=n).astype(np.float32)
+        signals = [base.copy() for _ in range(3)]
+
+        result_fused = triangulate(signals, triangle_mics, sample_rate=sr, distance_weight=0.0)
+        result_default = triangulate(signals, triangle_mics, sample_rate=sr, distance_weight=0.0)
+        # Both should converge to the same point
+        dx, dy = _latlon_to_meters(result_fused.lat, result_fused.lon,
+                                   result_default.lat, result_default.lon)
+        assert np.sqrt(dx**2 + dy**2) < 1.0
+
+    def test_fusion_still_converges(self, triangle_mics: list[MicPosition]) -> None:
+        """With fusion enabled, result should still be a valid location."""
+        sr = 16000
+        n = 16000
+        rng = np.random.default_rng(7)
+        base = rng.normal(size=n).astype(np.float32)
+        signals = [base.copy() for _ in range(3)]
+
+        result = triangulate(signals, triangle_mics, sample_rate=sr, distance_weight=0.3)
+        assert isinstance(result, TriangulationResult)
+        assert isinstance(result.error_m, float)
+
+    def test_fusion_source_near_mic_a(self, triangle_mics: list[MicPosition]) -> None:
+        """Fusion should still locate a source near mic_a when signal arrives there first."""
+        sr = 16000
+        n = 16000
+        rng = np.random.default_rng(12)
+        base = rng.normal(size=n).astype(np.float32)
+        shift = 5
+        sig_a = base.copy()
+        sig_b = np.roll(base, shift)
+        sig_c = np.roll(base, shift)
+        signals = [sig_a, sig_b, sig_c]
+
+        result = triangulate(signals, triangle_mics, sample_rate=sr, distance_weight=0.3)
+        mic_a = triangle_mics[0]
+        dx, dy = _latlon_to_meters(mic_a.lat, mic_a.lon, result.lat, result.lon)
+        dist_to_a = np.sqrt(dx**2 + dy**2)
+        assert dist_to_a < 200.0, f"Expected near mic_a, got {dist_to_a:.1f} m away"

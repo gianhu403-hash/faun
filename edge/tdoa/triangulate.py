@@ -4,6 +4,8 @@ from scipy.fft import rfft, irfft
 from scipy.signal import butter, sosfilt
 from dataclasses import dataclass
 
+from edge.tdoa.distance import estimate_distances
+
 SPEED_OF_SOUND = 343.0  # m/s at ~20C
 
 
@@ -111,15 +113,23 @@ def triangulate(
     sample_rate: int = 16000,
     use_bandpass: bool = True,
     temperature_c: float | None = None,
+    distance_weight: float = 0.3,
 ) -> TriangulationResult:
-    """Triangulate sound source using TDOA from 3 microphones.
+    """Triangulate sound source using TDOA + energy-based distance fusion.
 
-    Improvements over v1:
-    - Bandpass filter (200-6000 Hz) to reject wind/electronics noise
-    - All 3 TDOA pairs (AB, AC, BC) for overdetermined least-squares
-    - Multi-start optimization to avoid local minima
-    - Temperature-corrected speed of sound
-    - SNR-based confidence weighting
+    Combines two complementary approaches:
+    - TDOA (GCC-PHAT): constrains *difference* of distances between mic pairs
+    - Energy-based ranging: constrains *absolute* distance to each mic
+
+    Neither method is accurate alone, but together they narrow the
+    uncertainty region significantly.
+
+    Parameters
+    ----------
+    distance_weight : float
+        Relative weight of distance constraints vs TDOA constraints
+        in the cost function.  0.0 = pure TDOA, 1.0 = equal weight.
+        Default 0.3 (TDOA dominates, distance adds soft constraint).
     """
     assert len(signals) == 3 and len(mic_positions) == 3
 
@@ -157,20 +167,43 @@ def triangulate(
     snr_a = _signal_snr(sig_a)
     snr_b = _signal_snr(sig_b)
     snr_c = _signal_snr(sig_c)
-    # Weight for each pair = geometric mean of the two mics' SNR
+    # Weight for each pair = arithmetic mean of the two mics' SNR
     w_ab = max(1.0, (snr_a + snr_b) / 2.0)
     w_ac = max(1.0, (snr_a + snr_c) / 2.0)
     w_bc = max(1.0, (snr_b + snr_c) / 2.0)
+
+    # Energy-based distance estimates (inverse-square law)
+    dist_estimates = estimate_distances(
+        [sig_a, sig_b, sig_c],
+        [snr_a, snr_b, snr_c],
+    )
+    est_da = dist_estimates[0].distance_m
+    est_db = dist_estimates[1].distance_m
+    est_dc = dist_estimates[2].distance_m
+    # Per-mic confidence weights for distance constraints
+    conf_a = dist_estimates[0].confidence
+    conf_b = dist_estimates[1].confidence
+    conf_c = dist_estimates[2].confidence
 
     def cost(pos):
         x, y = pos
         da = np.sqrt(x**2 + y**2)
         db = np.sqrt((x - bx) ** 2 + (y - by) ** 2)
         dc = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+
+        # TDOA constraints (difference of distances)
         err_ab = (da - db) - d_ab
         err_ac = (da - dc) - d_ac
         err_bc = (db - dc) - d_bc
-        return w_ab * err_ab**2 + w_ac * err_ac**2 + w_bc * err_bc**2
+        tdoa_cost = w_ab * err_ab**2 + w_ac * err_ac**2 + w_bc * err_bc**2
+
+        # Distance constraints (absolute distance to each mic)
+        derr_a = (da - est_da) ** 2
+        derr_b = (db - est_db) ** 2
+        derr_c = (dc - est_dc) ** 2
+        dist_cost = conf_a * derr_a + conf_b * derr_b + conf_c * derr_c
+
+        return tdoa_cost + distance_weight * dist_cost
 
     # Multi-start optimization: try centroid + each mic position as initial guess
     centroid_x = mics_m[:, 0].mean()
