@@ -15,7 +15,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DB_PATH = os.getenv("RANGERS_DB_PATH", str(Path(__file__).parent / "rangers.sqlite"))
+_DEFAULT_DB_PATH = str(Path(__file__).parent / "rangers.sqlite")
+
+
+def _db_path() -> str:
+    return os.getenv("RANGERS_DB_PATH", _DEFAULT_DB_PATH)
 
 
 @dataclass
@@ -31,7 +35,7 @@ class Ranger:
 
 
 def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     return conn
 

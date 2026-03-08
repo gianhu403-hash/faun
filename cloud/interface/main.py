@@ -1,12 +1,28 @@
 import asyncio
 import json
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from cloud.notify.bot_app import start_bot, stop_bot
 
-app = FastAPI(title="ForestGuard")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        await start_bot()
+    except Exception:
+        logger.exception("Failed to start Telegram bot polling")
+    yield
+    await stop_bot()
+
+
+app = FastAPI(title="ForestGuard", lifespan=lifespan)
 
 FRONTEND_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
