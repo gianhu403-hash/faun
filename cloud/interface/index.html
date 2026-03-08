@@ -49,6 +49,7 @@
         <div id="controls">
             <button onclick="startDemo('chainsaw')">Бензопила</button>
             <button onclick="startDemo('gunshot')">Выстрел</button>
+            <button onclick="startDemo('engine')">Двигатель</button>
             <button onclick="startDemo('normal')">Птицы</button>
         </div>
         <div id="status"><span class="dot"></span> <span id="status-text">Отключено</span></div>
@@ -57,7 +58,7 @@
 
     <script>
         /* ---- Leaflet map ---- */
-        const map = L.map('map').setView([55.751, 37.613], 15);
+        const map = L.map('map').setView([57.37, 44.63], 12);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; OpenStreetMap'
         }).addTo(map);
@@ -148,6 +149,12 @@
 
                 case 'alert_sent':
                     addEvent('Алерт:', d.text, 'high');
+                    break;
+
+                case 'source_point':
+                    L.circleMarker([d.lat, d.lon], {radius: 12, color: '#ef4444', fillOpacity: 0.7})
+                     .addTo(map).bindPopup('Источник: ' + (d.scenario || '?'));
+                    addEvent('Источник звука:', d.scenario + ' (' + d.lat.toFixed(4) + ', ' + d.lon.toFixed(4) + ')', 'high');
                     break;
 
                 case 'onset_check':
