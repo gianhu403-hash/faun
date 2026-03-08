@@ -8,8 +8,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./demo/audio:/app/demo/audio 
-      - ./demo/photos:/app/demo/photos 
+      - .:/app
       - yamnet_cache:/tmp/yamnet_cache
     depends_on:
       - lora_gateway
