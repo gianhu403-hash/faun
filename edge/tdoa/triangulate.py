@@ -185,6 +185,12 @@ def triangulate(
     conf_b = dist_estimates[1].confidence
     conf_c = dist_estimates[2].confidence
 
+    # Normalisation factors so that distance_weight actually controls the balance.
+    # Without this, SNR-based TDOA weights (~40 dB) dwarf distance confidence (~0.4),
+    # making distance_weight meaningless.
+    w_tdoa_sum = w_ab + w_ac + w_bc + 1e-10
+    w_dist_sum = conf_a + conf_b + conf_c + 1e-10
+
     def cost(pos):
         x, y = pos
         da = np.sqrt(x**2 + y**2)
@@ -192,16 +198,17 @@ def triangulate(
         dc = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
 
         # TDOA constraints (difference of distances)
-        err_ab = (da - db) - d_ab
-        err_ac = (da - dc) - d_ac
-        err_bc = (db - dc) - d_bc
-        tdoa_cost = w_ab * err_ab**2 + w_ac * err_ac**2 + w_bc * err_bc**2
+        # _estimate_tdoa(a, b) > 0 means B is farther, i.e. TDOA = (dist_B - dist_A) / speed
+        err_ab = (db - da) - d_ab
+        err_ac = (dc - da) - d_ac
+        err_bc = (dc - db) - d_bc
+        tdoa_cost = (w_ab * err_ab**2 + w_ac * err_ac**2 + w_bc * err_bc**2) / w_tdoa_sum
 
         # Distance constraints (absolute distance to each mic)
         derr_a = (da - est_da) ** 2
         derr_b = (db - est_db) ** 2
         derr_c = (dc - est_dc) ** 2
-        dist_cost = conf_a * derr_a + conf_b * derr_b + conf_c * derr_c
+        dist_cost = (conf_a * derr_a + conf_b * derr_b + conf_c * derr_c) / w_dist_sum
 
         return tdoa_cost + distance_weight * dist_cost
 
