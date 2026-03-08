@@ -182,6 +182,8 @@ async def list_rangers():
                 "lon_min": r.zone_lon_min,
                 "lon_max": r.zone_lon_max,
             },
+            "current_lat": r.current_lat,
+            "current_lon": r.current_lon,
             "active": r.active,
         }
         for r in rangers
