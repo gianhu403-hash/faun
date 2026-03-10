@@ -12,7 +12,7 @@ services:
       - yamnet_cache:/tmp/yamnet_cache
     depends_on:
       lora_gateway:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
@@ -39,12 +39,6 @@ services:
     env_file:
       - .env
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('localhost',9000),5); s.close()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 volumes:
   yamnet_cache:

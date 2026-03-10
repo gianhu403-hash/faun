@@ -78,7 +78,7 @@ class MicSimulator:
 
         for mic_id, distance_m in distances.items():
             relative_dist = distance_m - min_dist
-            delay_samples = int(relative_dist / SPEED_OF_SOUND * SAMPLE_RATE)
+            delay_samples = max(0, int(relative_dist / SPEED_OF_SOUND * SAMPLE_RATE))
             delayed = np.concatenate([np.zeros(delay_samples), waveform])
 
             # Inverse-distance attenuation
