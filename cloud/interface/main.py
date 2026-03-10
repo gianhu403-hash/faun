@@ -67,6 +67,12 @@ async def lifespan(app):
 
 app = FastAPI(title="ForestGuard", lifespan=lifespan)
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 FRONTEND_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 

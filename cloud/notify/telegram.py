@@ -68,9 +68,9 @@ def _mark_sent(chat_id: int) -> None:
 
 
 def _get_target_chat_ids(lat: float, lon: float) -> list[int]:
-    """Get chat IDs of all active rangers (demo: notify everyone)."""
-    rangers = get_all_rangers()
-    return [r.chat_id for r in rangers if r.active]
+    """Get chat IDs of active rangers whose zone covers (lat, lon)."""
+    rangers = get_rangers_for_location(lat, lon)
+    return [r.chat_id for r in rangers]
 
 
 def _gating_level(confidence: float) -> str:

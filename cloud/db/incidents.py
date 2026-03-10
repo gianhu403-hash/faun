@@ -1,13 +1,48 @@
-"""In-memory incident store with state machine for ranger workflow.
+"""Incident store with state machine for ranger workflow.
 
 States: pending -> accepted -> on_site -> resolved | false_alarm
 
-For demo purposes, uses in-memory dict (not persistent across restarts).
+Backend selection: YDB (when YDB_ENDPOINT is set) or in-memory (default/tests).
 """
 
 import time
 import uuid
 from dataclasses import dataclass, field
+
+from cloud.notify.districts import get_district_name
+
+# ---------------------------------------------------------------------------
+# State machine
+# ---------------------------------------------------------------------------
+
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"accepted", "false_alarm"},
+    "accepted": {"on_site", "false_alarm"},
+    "on_site": {"resolved", "false_alarm"},
+    "resolved": set(),
+    "false_alarm": set(),
+}
+
+# Fields that update_incident is allowed to write
+_UPDATABLE_FIELDS = frozenset(
+    {
+        "status",
+        "accepted_by_chat_id",
+        "accepted_by_name",
+        "accepted_at",
+        "arrived_at",
+        "response_time_min",
+        "drone_photo_b64",
+        "drone_comment",
+        "ranger_photo_b64",
+        "ranger_report_raw",
+        "ranger_report_legal",
+        "protocol_pdf",
+        "resolution_details",
+        "district",
+        "is_demo",
+    }
+)
 
 
 @dataclass
@@ -20,6 +55,7 @@ class Incident:
     gating_level: str
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
+    district: str = ""
     drone_photo_b64: str | None = None
     drone_comment: str | None = None
     accepted_by_chat_id: int | None = None
@@ -32,8 +68,13 @@ class Incident:
     ranger_report_raw: str | None = None
     ranger_report_legal: str | None = None
     protocol_pdf: bytes | None = None
+    resolution_details: str = ""
     is_demo: bool = False
 
+
+# ---------------------------------------------------------------------------
+# In-memory backend (used by default / tests)
+# ---------------------------------------------------------------------------
 
 # incident_id -> Incident
 _incidents: dict[str, Incident] = {}
@@ -57,6 +98,7 @@ def create_incident(
         lon=lon,
         confidence=confidence,
         gating_level=gating_level,
+        district=get_district_name(lat, lon),
         is_demo=is_demo,
     )
     _incidents[incident.id] = incident
@@ -88,8 +130,34 @@ def update_status(incident_id: str, status: str) -> None:
         incident.status = status
 
 
+def update_incident(incident_id: str, **fields) -> None:
+    """Update incident fields with state machine validation.
+
+    Only fields in _UPDATABLE_FIELDS are accepted.
+    Status transitions are validated against VALID_TRANSITIONS.
+    """
+    incident = _incidents.get(incident_id)
+    if not incident:
+        return
+
+    new_status = fields.get("status")
+    if new_status and new_status != incident.status:
+        allowed = VALID_TRANSITIONS.get(incident.status, set())
+        if new_status not in allowed:
+            return  # reject invalid transition
+
+    for key, value in fields.items():
+        if key in _UPDATABLE_FIELDS:
+            setattr(incident, key, value)
+
+
+def get_all_incidents() -> list[Incident]:
+    """Return all incidents ordered by created_at descending."""
+    return sorted(_incidents.values(), key=lambda i: i.created_at, reverse=True)
+
+
 # ---------------------------------------------------------------------------
-# Backend selection: YDB (cloud) or SQLite (local fallback)
+# Backend selection: YDB (cloud) or in-memory (default)
 # ---------------------------------------------------------------------------
 
 import os as _os
@@ -104,3 +172,5 @@ if _os.getenv("YDB_ENDPOINT"):
     assign_chat_to_incident = _repo.assign_chat_to_incident
     clear_chat_incident = _repo.clear_chat_incident
     update_status = _repo.update_status
+    update_incident = _repo.update_incident
+    get_all_incidents = _repo.get_all_incidents

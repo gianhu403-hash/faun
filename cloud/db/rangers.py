@@ -58,7 +58,9 @@ def init_db() -> None:
             zone_lat_max REAL NOT NULL DEFAULT 90,
             zone_lon_min REAL NOT NULL DEFAULT 0,
             zone_lon_max REAL NOT NULL DEFAULT 180,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            current_lat REAL,
+            current_lon REAL
         )
     """)
     conn.commit()

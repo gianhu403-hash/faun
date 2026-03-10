@@ -12,7 +12,8 @@ import pytest
 
 from edge.audio.classifier import AudioResult
 from edge.decision.decider import (
-    CONFIDENCE_THRESHOLD,
+    CONFIDENCE_ALERT,
+    CONFIDENCE_VERIFY,
     Decision,
     PERMIT_CLASSES,
     PRIORITY_MAP,
@@ -80,21 +81,31 @@ class TestSafeClass:
 
 
 class TestConfidence:
-    def test_low_confidence_no_drone(self) -> None:
-        decision = decide(_ar("chainsaw", 0.50), _loc())
+    def test_log_only_below_verify(self) -> None:
+        """Below CONFIDENCE_VERIFY → log only, no action."""
+        decision = decide(_ar("chainsaw", 0.30), _loc())
         assert decision.send_drone is False
         assert decision.send_lora is False
         assert decision.priority == "low"
 
-    def test_confidence_at_threshold(self) -> None:
-        decision = decide(_ar("chainsaw", CONFIDENCE_THRESHOLD), _loc())
+    def test_verify_zone_no_drone(self) -> None:
+        """Between VERIFY and ALERT → LoRa only, no drone."""
+        decision = decide(_ar("chainsaw", 0.50), _loc())
+        assert decision.send_drone is False
+        assert decision.send_lora is True
+        assert decision.priority == "high"
+
+    def test_confidence_at_alert_threshold(self) -> None:
+        """At CONFIDENCE_ALERT → full alert (drone + LoRa)."""
+        decision = decide(_ar("chainsaw", CONFIDENCE_ALERT), _loc())
         assert decision.send_drone is True
         assert decision.send_lora is True
 
-    def test_confidence_below_threshold(self) -> None:
+    def test_confidence_below_alert_threshold(self) -> None:
+        """Just below CONFIDENCE_ALERT → verify zone (LoRa only)."""
         decision = decide(_ar("chainsaw", 0.69), _loc())
         assert decision.send_drone is False
-        assert decision.send_lora is False
+        assert decision.send_lora is True
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +212,9 @@ YESTERDAY = TODAY - timedelta(days=1)
 LAST_YEAR = TODAY - timedelta(days=365)
 
 # Zone covering the default test location (55.751, 37.613)
-PERMIT_ZONE = dict(zone_lat_min=55.0, zone_lat_max=56.0,
-                   zone_lon_min=37.0, zone_lon_max=38.0)
+PERMIT_ZONE = dict(
+    zone_lat_min=55.0, zone_lat_max=56.0, zone_lon_min=37.0, zone_lon_max=38.0
+)
 
 
 class TestPermitSuppression:
@@ -245,9 +257,14 @@ class TestPermitSuppression:
 
     def test_chainsaw_wrong_zone_alerts(self) -> None:
         """Permit in different zone → alert."""
-        add_permit(zone_lat_min=60.0, zone_lat_max=61.0,
-                   zone_lon_min=30.0, zone_lon_max=31.0,
-                   valid_from=TODAY, valid_until=NEXT_MONTH)
+        add_permit(
+            zone_lat_min=60.0,
+            zone_lat_max=61.0,
+            zone_lon_min=30.0,
+            zone_lon_max=31.0,
+            valid_from=TODAY,
+            valid_until=NEXT_MONTH,
+        )
         decision = decide(_ar("chainsaw", 0.90), _loc())
         assert decision.send_drone is True
 
@@ -270,11 +287,11 @@ class TestPermitSuppression:
         assert PERMIT_CLASSES == {"chainsaw", "axe", "engine"}
 
     def test_low_confidence_skips_permit_check(self) -> None:
-        """Low confidence exits before permit check."""
+        """Below CONFIDENCE_VERIFY exits before permit check."""
         add_permit(**PERMIT_ZONE, valid_from=TODAY, valid_until=NEXT_MONTH)
-        decision = decide(_ar("chainsaw", 0.50), _loc())
+        decision = decide(_ar("chainsaw", 0.30), _loc())
         assert decision.send_drone is False
-        assert "confidence" in decision.reason.lower()
+        assert decision.send_lora is False
 
     def test_background_skips_permit_check(self) -> None:
         """Background exits before permit check."""

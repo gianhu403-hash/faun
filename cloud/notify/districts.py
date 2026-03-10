@@ -19,6 +19,19 @@ class District:
     lon_max: float
 
 
+def get_district_name(lat: float, lon: float) -> str:
+    """Return the name of the sub-district containing the given coordinates.
+
+    Falls back to "Варнавинское" if no sub-district matches.
+    """
+    for slug, d in DISTRICTS.items():
+        if slug == "varnavino":
+            continue  # skip the umbrella district
+        if d.lat_min <= lat <= d.lat_max and d.lon_min <= lon <= d.lon_max:
+            return d.name_ru
+    return "Варнавинское"
+
+
 DISTRICTS: dict[str, District] = {
     "varnavino": District(
         slug="varnavino",

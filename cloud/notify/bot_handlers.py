@@ -44,6 +44,7 @@ from cloud.db.incidents import (
     assign_chat_to_incident,
     clear_chat_incident,
     update_status,
+    update_incident,
 )
 from cloud.notify.districts import DISTRICTS
 from cloud.notify.telegram import (
@@ -240,11 +241,19 @@ async def accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ranger = get_ranger_by_chat_id(chat_id)
     name = ranger.name if ranger else (query.from_user.full_name or str(chat_id))
 
-    # Update incident
+    # Update incident — persist all fields
+    now = time.time()
+    update_incident(
+        incident_id,
+        status="accepted",
+        accepted_by_chat_id=chat_id,
+        accepted_by_name=name,
+        accepted_at=now,
+    )
     incident.status = "accepted"
     incident.accepted_by_chat_id = chat_id
     incident.accepted_by_name = name
-    incident.accepted_at = time.time()
+    incident.accepted_at = now
     assign_chat_to_incident(chat_id, incident_id)
 
     maps_url = f"https://maps.yandex.ru/?pt={incident.lon},{incident.lat}&z=15"
@@ -300,12 +309,19 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     PROXIMITY_RADIUS_M = 1000
 
     if incident.is_demo or dist <= PROXIMITY_RADIUS_M:
-        incident.status = "on_site"
-        incident.arrived_at = time.time()
+        now = time.time()
+        resp_min = None
         if incident.created_at:
-            incident.response_time_min = round(
-                (incident.arrived_at - incident.created_at) / 60, 1
-            )
+            resp_min = round((now - incident.created_at) / 60, 1)
+        update_incident(
+            incident.id,
+            status="on_site",
+            arrived_at=now,
+            response_time_min=resp_min,
+        )
+        incident.status = "on_site"
+        incident.arrived_at = now
+        incident.response_time_min = resp_min
         await send_arrival_question(chat_id, incident)
     else:
         await update.message.reply_text(
@@ -335,7 +351,13 @@ async def verdict_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = query.message.chat_id
 
     if verdict_type == "false":
-        update_status(incident_id, "false_alarm")
+        update_incident(
+            incident_id,
+            status="false_alarm",
+            resolution_details="Ложное срабатывание, закрыто инспектором",
+        )
+        if incident:
+            incident.status = "false_alarm"
         clear_chat_incident(chat_id)
         await query.edit_message_text("Принято, инцидент закрыт. Спасибо за проверку.")
 
@@ -374,6 +396,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         incident.ranger_report_raw = text
+        update_incident(incident.id, ranger_report_raw=text)
         await update.message.reply_text(f'Текст сохранен:\n"{text}"')
 
         # If photo already collected, generate protocol
@@ -409,6 +432,7 @@ async def handle_inspector_photo(
             # Check for caption as report text
             if update.message.caption:
                 incident.ranger_report_raw = update.message.caption
+                update_incident(incident.id, ranger_report_raw=update.message.caption)
 
             await update.message.reply_text("Фото сохранено.")
 
@@ -539,6 +563,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return  # Ignore non-contextual text
 
     incident.ranger_report_raw = text
+    update_incident(incident.id, ranger_report_raw=text)
     await update.message.reply_text("Описание сохранено.")
 
     if incident.ranger_photo_b64:
@@ -602,12 +627,15 @@ async def _generate_and_send_protocol(chat_id: int, incident) -> None:
     try:
         from cloud.agent.rag_agent import legalize_report
 
-        incident.ranger_report_legal = await legalize_report(
+        legal_text = await legalize_report(
             incident.audio_class, incident.ranger_report_raw
         )
+        incident.ranger_report_legal = legal_text
+        update_incident(incident.id, ranger_report_legal=legal_text)
     except Exception as e:
         logger.warning("Failed to legalize report via YandexGPT: %s", e)
         incident.ranger_report_legal = incident.ranger_report_raw
+        update_incident(incident.id, ranger_report_legal=incident.ranger_report_raw)
         await bot.send_message(
             chat_id=chat_id,
             text="Не удалось обработать описание через YandexGPT, "
@@ -641,7 +669,12 @@ async def _generate_and_send_protocol(chat_id: int, incident) -> None:
 
     # 4. Send PDF and resolve
     await send_protocol_pdf(chat_id, pdf_bytes)
-    update_status(incident.id, "resolved")
+    update_incident(
+        incident.id,
+        status="resolved",
+        resolution_details="Протокол составлен, материалы переданы",
+    )
+    incident.status = "resolved"
     clear_chat_incident(chat_id)
 
 

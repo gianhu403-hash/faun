@@ -144,6 +144,12 @@ class IncidentRepository(ABC):
     @abstractmethod
     def update_status(self, incident_id: str, status: str) -> None: ...
 
+    @abstractmethod
+    def update_incident(self, incident_id: str, **fields) -> None: ...
+
+    @abstractmethod
+    def get_all_incidents(self) -> list[Incident]: ...
+
 
 # ---------------------------------------------------------------------------
 # Microphones
