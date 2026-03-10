@@ -25,6 +25,13 @@ from telegram.ext import (
 
 logger = logging.getLogger(__name__)
 
+try:
+    from cloud.interface.main import broadcast
+except ImportError:
+
+    async def broadcast(_msg):
+        pass
+
 
 async def drone_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start — welcome message."""
@@ -53,23 +60,16 @@ async def drone_photo_handler(
         result = await classify_photo(photo_b64)
 
         # Broadcast vision result to web dashboard
-        try:
-            from cloud.interface.main import broadcast
-        except ImportError:
-
-            async def broadcast(_msg):
-                pass
-
         await broadcast(
             {
-                "type": "vision_classified",
+                "event": "vision_classified",
                 "description": result.description,
                 "has_felling": result.has_felling,
                 "has_human": result.has_human,
                 "has_fire": result.has_fire,
             }
         )
-        await broadcast({"type": "drone_photo", "photo_b64": photo_b64})
+        await broadcast({"event": "drone_photo", "drone_b64": photo_b64})
 
         has_threat = result.has_felling or result.has_human or result.has_fire
 
@@ -117,13 +117,13 @@ async def drone_photo_handler(
 
             await broadcast(
                 {
-                    "type": "alert_sent",
+                    "event": "alert_sent",
                     "audio_class": audio_class,
                     "lat": lat,
                     "lon": lon,
                 }
             )
-            await broadcast({"type": "pipeline_end", "result": "incident_created"})
+            await broadcast({"event": "pipeline_end", "reason": "incident_created"})
 
             await update.message.reply_text(
                 f"*Инцидент создан*\n\n"
@@ -133,7 +133,7 @@ async def drone_photo_handler(
                 parse_mode="Markdown",
             )
         else:
-            await broadcast({"type": "pipeline_end", "result": "no_threat"})
+            await broadcast({"event": "pipeline_end", "reason": "no_threat"})
 
             reply = f"*Анализ фото:*\n{result.description}\n\nНарушений не обнаружено."
             await update.message.reply_text(reply, parse_mode="Markdown")

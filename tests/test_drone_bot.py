@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # cloud.interface.main requires FastAPI (not in test env) — register mock module
+# This must happen BEFORE importing drone_bot_handlers so that its module-level
+# `from cloud.interface.main import broadcast` import succeeds.
 import cloud.interface
 
 _mock_main_module = MagicMock()
@@ -33,12 +35,6 @@ def _make_photo_update(chat_id: int):
     return update
 
 
-@pytest.fixture(autouse=True)
-def _reset_broadcast():
-    _mock_main_module.broadcast.reset_mock()
-    yield
-
-
 class TestDroneBot:
     @pytest.mark.asyncio
     async def test_start_command(self):
@@ -51,8 +47,9 @@ class TestDroneBot:
         assert "drone bot" in text.lower() or "фото" in text.lower()
 
     @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
     @patch("cloud.vision.classifier.classify_photo", new_callable=AsyncMock)
-    async def test_photo_no_threat(self, mock_classify):
+    async def test_photo_no_threat(self, mock_classify, mock_broadcast):
         result = MagicMock()
         result.description = "Лес и тропинка"
         result.has_felling = False
@@ -67,9 +64,10 @@ class TestDroneBot:
         text = update.message.reply_text.call_args[0][0]
         assert "нарушений не обнаружено" in text.lower()
         # broadcast: vision_classified, drone_photo, pipeline_end
-        assert _mock_main_module.broadcast.call_count == 3
+        assert mock_broadcast.call_count == 3
 
     @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
     @patch("cloud.notify.telegram.send_confirmed", new_callable=AsyncMock)
     @patch(
         "cloud.agent.decision.compose_alert",
@@ -84,6 +82,7 @@ class TestDroneBot:
         mock_send_pending,
         mock_compose_alert,
         mock_send_confirmed,
+        mock_broadcast,
     ):
         result = MagicMock()
         result.description = "Видна рубка деревьев"
@@ -103,7 +102,7 @@ class TestDroneBot:
         mock_send_confirmed.assert_called_once()
         assert mock_send_confirmed.call_args[0][1] == b"fake-photo"
         # broadcast: vision_classified, drone_photo, alert_sent, pipeline_end
-        assert _mock_main_module.broadcast.call_count == 4
+        assert mock_broadcast.call_count == 4
         text = update.message.reply_text.call_args[0][0]
         assert "инцидент создан" in text.lower()
 
