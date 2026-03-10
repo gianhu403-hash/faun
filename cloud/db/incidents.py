@@ -19,11 +19,14 @@ class Incident:
     confidence: float
     gating_level: str
     status: str = "pending"
+    created_at: float = field(default_factory=time.time)
     drone_photo_b64: str | None = None
     drone_comment: str | None = None
     accepted_by_chat_id: int | None = None
     accepted_by_name: str | None = None
     accepted_at: float | None = None
+    arrived_at: float | None = None
+    response_time_min: float | None = None
     alert_message_ids: dict[int, int] = field(default_factory=dict)
     ranger_photo_b64: str | None = None
     ranger_report_raw: str | None = None

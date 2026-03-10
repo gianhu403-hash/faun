@@ -301,6 +301,11 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if incident.is_demo or dist <= PROXIMITY_RADIUS_M:
         incident.status = "on_site"
+        incident.arrived_at = time.time()
+        if incident.created_at:
+            incident.response_time_min = round(
+                (incident.arrived_at - incident.created_at) / 60, 1
+            )
         await send_arrival_question(chat_id, incident)
     else:
         await update.message.reply_text(
