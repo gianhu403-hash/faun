@@ -23,7 +23,11 @@ import numpy as np
 import pytest
 
 from cloud.agent.decision import Alert
-from cloud.db.rangers import add_ranger, get_rangers_for_location, init_db as init_rangers_db
+from cloud.db.rangers import (
+    add_ranger,
+    get_rangers_for_location,
+    init_db as init_rangers_db,
+)
 from cloud.db.permits import add_permit, has_valid_permit, init_db as init_permits_db
 from cloud.notify.districts import DISTRICTS
 from cloud.notify.telegram import (
@@ -111,7 +115,7 @@ class TestScenario1_IllegalChainsaw:
         # ── Step 1: Microphones detect a sharp sound ──
         _step("MIC", "АКУСТИЧЕСКИЕ ДАТЧИКИ", "3 микрофона в лесу")
         for i, mic in enumerate(MICS):
-            _substep(f"Микрофон {chr(65+i)}: {mic.lat:.4f}N, {mic.lon:.4f}E")
+            _substep(f"Микрофон {chr(65 + i)}: {mic.lat:.4f}N, {mic.lon:.4f}E")
 
         detector = OnsetDetector()
         silence = np.zeros(8000, dtype=np.float32)
@@ -129,8 +133,12 @@ class TestScenario1_IllegalChainsaw:
         # ── Step 2: Audio classification ──
         _step("BRAIN", "КЛАССИФИКАЦИЯ ЗВУКА", "YAMNet + forest_head")
         scores = {
-            "chainsaw": 0.92, "gunshot": 0.02, "engine": 0.03,
-            "axe": 0.01, "fire": 0.01, "background": 0.01,
+            "chainsaw": 0.92,
+            "gunshot": 0.02,
+            "engine": 0.03,
+            "axe": 0.01,
+            "fire": 0.01,
+            "background": 0.01,
         }
         audio = AudioResult(label="chainsaw", confidence=0.92, raw_scores=scores)
         _result_box("label", f"chainsaw (бензопила)")
@@ -146,7 +154,9 @@ class TestScenario1_IllegalChainsaw:
         _result_box("lat", f"{location.lat:.4f}N")
         _result_box("lon", f"{location.lon:.4f}E")
         _result_box("error", f"+/-{location.error_m:.0f}m")
-        _substep(f"Yandex Maps: https://maps.yandex.ru/?pt={location.lon},{location.lat}&z=15")
+        _substep(
+            f"Yandex Maps: https://maps.yandex.ru/?pt={location.lon},{location.lat}&z=15"
+        )
 
         # ── Step 4: Permit check ──
         _step("PERMIT", "ПРОВЕРКА РАЗРЕШЕНИЙ", "Лесной билет")
@@ -180,7 +190,9 @@ class TestScenario1_IllegalChainsaw:
                 bar = "=" * int(pct / 5) + ">" + " " * (20 - int(pct / 5))
                 _substep(f"[{bar}] {pct:3.0f}%  {pos.lat:.4f}N {pos.lon:.4f}E")
             photo = await drone.capture_photo()
-            _substep(f"Фото: {len(photo.data)} байт at {photo.lat:.4f}N {photo.lon:.4f}E")
+            _substep(
+                f"Фото: {len(photo.data)} байт at {photo.lat:.4f}N {photo.lon:.4f}E"
+            )
             await drone.return_home()
             _substep("Дрон вернулся на базу")
             return photo
@@ -206,10 +218,11 @@ class TestScenario1_IllegalChainsaw:
         _step("VISION", "YANDEX VISION", "Анализ фото с дрона")
         vision_result = {
             "description": "На снимке видна поляна с поваленными деревьями, "
-                          "рядом стоит человек с бензопилой",
+            "рядом стоит человек с бензопилой",
             "has_human": True,
             "has_fire": False,
             "has_felling": True,
+            "is_threat": True,
         }
         for k, v in vision_result.items():
             _result_box(k, str(v))
@@ -227,9 +240,12 @@ class TestScenario1_IllegalChainsaw:
         # ── Step 10: Ranger lookup + Telegram ──
         _step("RANGER", "МАРШРУТИЗАЦИЯ АЛЕРТА", "Поиск егерей в зоне")
         add_ranger(
-            "Лесник Николай Петрович", 12345,
-            VARNAVINO.lat_min, VARNAVINO.lat_max,
-            VARNAVINO.lon_min, VARNAVINO.lon_max,
+            "Лесник Николай Петрович",
+            12345,
+            VARNAVINO.lat_min,
+            VARNAVINO.lat_max,
+            VARNAVINO.lon_min,
+            VARNAVINO.lon_max,
         )
         rangers = get_rangers_for_location(location.lat, location.lon)
         _result_box("rangers_in_zone", str(len(rangers)))
@@ -255,9 +271,15 @@ class TestScenario1_IllegalChainsaw:
         # ── Step 11: WebSocket broadcast to dashboard ──
         _step("DASHBOARD", "ВЕБ-ДАШБОРД", "WebSocket broadcast")
         events = [
-            "mic_active", "onset_check", "audio_classified",
-            "location_found", "agent_decision", "drone_moving",
-            "drone_photo", "vision_classified", "alert_sent",
+            "mic_active",
+            "onset_check",
+            "audio_classified",
+            "location_found",
+            "agent_decision",
+            "drone_moving",
+            "drone_photo",
+            "vision_classified",
+            "alert_sent",
             "pipeline_end",
         ]
         for evt in events:
@@ -287,9 +309,16 @@ class TestScenario2_LegalForestry:
         _step("BRAIN", "КЛАССИФИКАЦИЯ", "chainsaw 94%")
 
         audio = AudioResult(
-            label="chainsaw", confidence=0.94,
-            raw_scores={"chainsaw": 0.94, "gunshot": 0.01, "engine": 0.02,
-                        "axe": 0.01, "fire": 0.01, "background": 0.01},
+            label="chainsaw",
+            confidence=0.94,
+            raw_scores={
+                "chainsaw": 0.94,
+                "gunshot": 0.01,
+                "engine": 0.02,
+                "axe": 0.01,
+                "fire": 0.01,
+                "background": 0.01,
+            },
         )
         location = TriangulationResult(lat=57.25, lon=45.10, error_m=8.0)
 
@@ -297,8 +326,12 @@ class TestScenario2_LegalForestry:
 
         _step("PERMIT", "ПРОВЕРКА РАЗРЕШЕНИЙ", "Ищем лесной билет...")
         permit = add_permit(
-            57.0, 57.5, 44.8, 45.5,
-            TODAY, NEXT_MONTH,
+            57.0,
+            57.5,
+            44.8,
+            45.5,
+            TODAY,
+            NEXT_MONTH,
             "Санитарная рубка, делянка №12, Варнавинское лесничество",
         )
         has_permit = has_valid_permit(location.lat, location.lon)
@@ -317,13 +350,21 @@ class TestScenario2_LegalForestry:
         assert decision.send_drone is False
         assert decision.send_lora is False
 
-        _step("STOP", "PIPELINE ОСТАНОВЛЕН",
-              "Разрешённая деятельность. Дрон НЕ вылетает. Егерь НЕ побеспокоен.")
+        _step(
+            "STOP",
+            "PIPELINE ОСТАНОВЛЕН",
+            "Разрешённая деятельность. Дрон НЕ вылетает. Егерь НЕ побеспокоен.",
+        )
 
         # Register ranger to show they exist but won't be notified
-        add_ranger("Лесник Василий", 99999,
-                   VARNAVINO.lat_min, VARNAVINO.lat_max,
-                   VARNAVINO.lon_min, VARNAVINO.lon_max)
+        add_ranger(
+            "Лесник Василий",
+            99999,
+            VARNAVINO.lat_min,
+            VARNAVINO.lat_max,
+            VARNAVINO.lon_min,
+            VARNAVINO.lon_max,
+        )
         rangers = get_rangers_for_location(location.lat, location.lon)
         _substep(f"Егерь '{rangers[0].name}' есть в зоне, но его не побеспокоили")
 
@@ -364,13 +405,24 @@ class TestScenario3_Gunshot:
 
         _step("BRAIN", "КЛАССИФИКАЦИЯ", "gunshot 95%")
         audio = AudioResult(
-            label="gunshot", confidence=0.95,
-            raw_scores={"chainsaw": 0.01, "gunshot": 0.95, "engine": 0.01,
-                        "axe": 0.01, "fire": 0.01, "background": 0.01},
+            label="gunshot",
+            confidence=0.95,
+            raw_scores={
+                "chainsaw": 0.01,
+                "gunshot": 0.95,
+                "engine": 0.01,
+                "axe": 0.01,
+                "fire": 0.01,
+                "background": 0.01,
+            },
         )
 
         location = TriangulationResult(lat=57.31, lon=45.05, error_m=15.0)
-        _step("LOCATE", "ТРИАНГУЛЯЦИЯ", f"{location.lat:.4f}N {location.lon:.4f}E (+/-{location.error_m:.0f}м)")
+        _step(
+            "LOCATE",
+            "ТРИАНГУЛЯЦИЯ",
+            f"{location.lat:.4f}N {location.lon:.4f}E (+/-{location.error_m:.0f}м)",
+        )
 
         _step("PERMIT", "ПРОВЕРКА РАЗРЕШЕНИЙ", "Есть лесной билет, НО...")
         add_permit(57.0, 57.5, 44.8, 45.5, TODAY, NEXT_MONTH, "Лесозаготовка")
@@ -387,9 +439,14 @@ class TestScenario3_Gunshot:
         _step("DRONE", "ДРОН ВЫЛЕТАЕТ", "Экстренный вылет")
         _step("TELEGRAM", "АЛЕРТ ЕГЕРЮ", "Выстрел в лесу!")
 
-        add_ranger("Охотинспектор Сергей", 77777,
-                   VARNAVINO.lat_min, VARNAVINO.lat_max,
-                   VARNAVINO.lon_min, VARNAVINO.lon_max)
+        add_ranger(
+            "Охотинспектор Сергей",
+            77777,
+            VARNAVINO.lat_min,
+            VARNAVINO.lat_max,
+            VARNAVINO.lon_min,
+            VARNAVINO.lon_max,
+        )
         rangers = get_rangers_for_location(location.lat, location.lon)
         assert len(rangers) == 1
         _substep(f"-> {rangers[0].name} (chat_id={rangers[0].chat_id})")
@@ -414,11 +471,20 @@ class TestScenario4_AntiSpam:
     def test_rate_limiting_demo(self):
         _header("СЦЕНАРИЙ: Анти-спам (rate limiting)")
 
-        _step("SETUP", "НАСТРОЙКА", f"Cooldown = {COOLDOWN_SECONDS} сек ({COOLDOWN_SECONDS // 60} мин)")
+        _step(
+            "SETUP",
+            "НАСТРОЙКА",
+            f"Cooldown = {COOLDOWN_SECONDS} сек ({COOLDOWN_SECONDS // 60} мин)",
+        )
 
-        add_ranger("Егерь Алексей", 55555,
-                   VARNAVINO.lat_min, VARNAVINO.lat_max,
-                   VARNAVINO.lon_min, VARNAVINO.lon_max)
+        add_ranger(
+            "Егерь Алексей",
+            55555,
+            VARNAVINO.lat_min,
+            VARNAVINO.lat_max,
+            VARNAVINO.lon_min,
+            VARNAVINO.lon_max,
+        )
 
         _step("ALERT_1", "ПЕРВЫЙ АЛЕРТ", "chainsaw в 14:00:00")
         assert not _is_rate_limited(55555)
@@ -470,19 +536,24 @@ class TestScenario5_ZoneRouting:
         _step("SETUP", "РЕГИСТРАЦИЯ ЕГЕРЕЙ", "3 егеря, разные зоны")
 
         # Varnavino ranger
-        add_ranger("Николай (Варнавино)", 1001,
-                   VARNAVINO.lat_min, VARNAVINO.lat_max,
-                   VARNAVINO.lon_min, VARNAVINO.lon_max)
-        _substep(f"  Николай -> Варнавинское ({VARNAVINO.lat_min}-{VARNAVINO.lat_max}N)")
+        add_ranger(
+            "Николай (Варнавино)",
+            1001,
+            VARNAVINO.lat_min,
+            VARNAVINO.lat_max,
+            VARNAVINO.lon_min,
+            VARNAVINO.lon_max,
+        )
+        _substep(
+            f"  Николай -> Варнавинское ({VARNAVINO.lat_min}-{VARNAVINO.lat_max}N)"
+        )
 
         # "Moscow" ranger (fictional zone)
-        add_ranger("Дмитрий (Москва)", 2002,
-                   55.5, 56.0, 37.0, 38.0)
+        add_ranger("Дмитрий (Москва)", 2002, 55.5, 56.0, 37.0, 38.0)
         _substep(f"  Дмитрий -> Московская (55.5-56.0N)")
 
         # "SPb" ranger (fictional zone)
-        add_ranger("Ольга (СПб)", 3003,
-                   59.5, 60.5, 29.5, 31.0)
+        add_ranger("Ольга (СПб)", 3003, 59.5, 60.5, 29.5, 31.0)
         _substep(f"  Ольга -> Ленинградская (59.5-60.5N)")
 
         # ── Detection in Varnavino ──
@@ -552,10 +623,16 @@ class TestScenario6_DroneFlightPath:
             for i, pos in enumerate(positions):
                 dist_pct = (i + 1) / len(positions) * 100
                 marker = ">>>" if i == len(positions) - 1 else " | "
-                print(f"      {marker} {pos.lat:.4f}N, {pos.lon:.4f}E  [{dist_pct:3.0f}%]")
+                print(
+                    f"      {marker} {pos.lat:.4f}N, {pos.lon:.4f}E  [{dist_pct:3.0f}%]"
+                )
             print(f"      TARGET ({target_lat:.4f}N)")
 
-            _step("PHOTO", "ФОТОСЪЕМКА", f"at {drone.current_lat:.4f}N {drone.current_lon:.4f}E")
+            _step(
+                "PHOTO",
+                "ФОТОСЪЕМКА",
+                f"at {drone.current_lat:.4f}N {drone.current_lon:.4f}E",
+            )
             photo = await drone.capture_photo()
             _result_box("photo_size", f"{len(photo.data)} bytes")
             _result_box("photo_lat", f"{photo.lat:.4f}")
@@ -564,7 +641,9 @@ class TestScenario6_DroneFlightPath:
 
             _step("RETURN", "ВОЗВРАТ НА БАЗУ")
             await drone.return_home()
-            _result_box("position", f"{drone.current_lat:.4f}N, {drone.current_lon:.4f}E")
+            _result_box(
+                "position", f"{drone.current_lat:.4f}N, {drone.current_lon:.4f}E"
+            )
             assert drone.current_lat == base_lat
             assert drone.current_lon == base_lon
 
@@ -594,39 +673,53 @@ class TestScenario7_DashboardEvents:
         _header("СЦЕНАРИЙ: Хронология событий дашборда (WebSocket)")
 
         events = [
-            ("mic_active", 0.0,
-             '{"event":"mic_active","mics":[{"lat":57.3,"lon":45.0},...]}'
-             ),
-            ("onset_check", 0.5,
-             '{"event":"onset_check","triggered":true,"energy_ratio":12.4}'
-             ),
-            ("audio_classified", 1.2,
-             '{"event":"audio_classified","class":"chainsaw","confidence":0.92}'
-             ),
-            ("location_found", 1.8,
-             '{"event":"location_found","lat":57.3005,"lon":45.0008,"error_m":12}'
-             ),
-            ("agent_decision", 2.0,
-             '{"event":"agent_decision","send_drone":true,"priority":"high"}'
-             ),
-            ("drone_moving", 2.5,
-             '{"event":"drone_moving","lat":57.3001,"lon":45.0002}'
-             ),
-            ("drone_moving", 3.0,
-             '{"event":"drone_moving","lat":57.3003,"lon":45.0005}'
-             ),
-            ("drone_photo", 5.0,
-             '{"event":"drone_photo","drone_b64":"<JPEG base64>"}'
-             ),
-            ("vision_classified", 6.5,
-             '{"event":"vision_classified","has_felling":true,"has_human":true}'
-             ),
-            ("alert_sent", 7.0,
-             '{"event":"alert_sent","text":"Обнаружена вырубка...","priority":"ВЫСОКИЙ"}'
-             ),
-            ("pipeline_end", 7.5,
-             '{"event":"pipeline_end","reason":"complete"}'
-             ),
+            (
+                "mic_active",
+                0.0,
+                '{"event":"mic_active","mics":[{"lat":57.3,"lon":45.0},...]}',
+            ),
+            (
+                "onset_check",
+                0.5,
+                '{"event":"onset_check","triggered":true,"energy_ratio":12.4}',
+            ),
+            (
+                "audio_classified",
+                1.2,
+                '{"event":"audio_classified","class":"chainsaw","confidence":0.92}',
+            ),
+            (
+                "location_found",
+                1.8,
+                '{"event":"location_found","lat":57.3005,"lon":45.0008,"error_m":12}',
+            ),
+            (
+                "agent_decision",
+                2.0,
+                '{"event":"agent_decision","send_drone":true,"priority":"high"}',
+            ),
+            (
+                "drone_moving",
+                2.5,
+                '{"event":"drone_moving","lat":57.3001,"lon":45.0002}',
+            ),
+            (
+                "drone_moving",
+                3.0,
+                '{"event":"drone_moving","lat":57.3003,"lon":45.0005}',
+            ),
+            ("drone_photo", 5.0, '{"event":"drone_photo","drone_b64":"<JPEG base64>"}'),
+            (
+                "vision_classified",
+                6.5,
+                '{"event":"vision_classified","has_felling":true,"has_human":true}',
+            ),
+            (
+                "alert_sent",
+                7.0,
+                '{"event":"alert_sent","text":"Обнаружена вырубка...","priority":"ВЫСОКИЙ"}',
+            ),
+            ("pipeline_end", 7.5, '{"event":"pipeline_end","reason":"complete"}'),
         ]
 
         _step("WS", "WEBSOCKET TIMELINE", "ws://localhost:8000/ws")
@@ -648,7 +741,7 @@ class TestScenario7_DashboardEvents:
 
         # Verify event order makes sense
         for i in range(1, len(events)):
-            assert events[i][1] >= events[i-1][1], "Events must be chronological"
+            assert events[i][1] >= events[i - 1][1], "Events must be chronological"
 
         _header("DASHBOARD TIMELINE COMPLETE")
         print()
@@ -683,8 +776,11 @@ class TestScenario8_FalsePositive:
         _substep("Нет резкого перепада энергии -> НЕ срабатывает")
         assert not onset.triggered
 
-        _step("STOP", "PIPELINE ОСТАНОВЛЕН НА ЭТАПЕ 1",
-              "Дальше не идём: нет onset -> нет классификации -> нет дрона")
+        _step(
+            "STOP",
+            "PIPELINE ОСТАНОВЛЕН НА ЭТАПЕ 1",
+            "Дальше не идём: нет onset -> нет классификации -> нет дрона",
+        )
 
         _substep("Микрофон продолжает слушать...")
         _substep("Ресурсы сэкономлены (YAMNet не вызван, дрон на базе)")

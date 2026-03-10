@@ -55,6 +55,7 @@ class TestDroneBot:
         result.has_felling = False
         result.has_human = False
         result.has_fire = False
+        result.is_threat = False
         mock_classify.return_value = result
 
         update = _make_photo_update(100)
@@ -89,6 +90,7 @@ class TestDroneBot:
         result.has_felling = True
         result.has_human = False
         result.has_fire = False
+        result.is_threat = True
         mock_classify.return_value = result
         mock_send_pending.return_value = MagicMock()
 
@@ -129,6 +131,7 @@ class TestDroneBot:
         result.has_felling = True
         result.has_human = False
         result.has_fire = False
+        result.is_threat = True
         mock_classify.return_value = result
         mock_send_pending.return_value = MagicMock()
 

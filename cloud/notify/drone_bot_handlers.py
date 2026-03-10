@@ -67,11 +67,12 @@ async def drone_photo_handler(
                 "has_felling": result.has_felling,
                 "has_human": result.has_human,
                 "has_fire": result.has_fire,
+                "is_threat": result.is_threat,
             }
         )
         await broadcast({"event": "drone_photo", "drone_b64": photo_b64})
 
-        has_threat = result.has_felling or result.has_human or result.has_fire
+        has_threat = result.is_threat
 
         if has_threat:
             # Map vision flags to audio class for pipeline compatibility

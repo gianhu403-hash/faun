@@ -97,6 +97,8 @@ async def health():
 
 
 FRONTEND_DIR = Path(__file__).parent
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+app.mount("/static/data", StaticFiles(directory=str(DATA_DIR)), name="data")
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 _clients: list[WebSocket] = []
@@ -789,6 +791,7 @@ async def live_photo(file: UploadFile):
             "has_human": result.has_human,
             "has_fire": result.has_fire,
             "has_felling": result.has_felling,
+            "is_threat": result.is_threat,
         }
     )
     return {
@@ -796,6 +799,7 @@ async def live_photo(file: UploadFile):
         "has_human": result.has_human,
         "has_fire": result.has_fire,
         "has_felling": result.has_felling,
+        "is_threat": result.is_threat,
     }
 
 
@@ -981,6 +985,7 @@ async def _run_demo(
             "has_human": vision_result.has_human,
             "has_fire": vision_result.has_fire,
             "has_felling": vision_result.has_felling,
+            "is_threat": vision_result.is_threat,
         }
     )
 

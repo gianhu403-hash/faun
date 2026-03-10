@@ -22,8 +22,10 @@ PROMPT = """Проанализируй снимок с дрона в лесу.
   "description": "краткое описание что на снимке (1-2 предложения)",
   "has_human": true/false,
   "has_fire": true/false,
-  "has_felling": true/false
-}"""
+  "has_felling": true/false,
+  "is_threat": true/false
+}
+is_threat = true ТОЛЬКО если видны признаки нарушения: незаконная рубка, браконьерство, поджог, подозрительная техника. Туристы, грибники, мероприятия, дороги — это НЕ угроза."""
 
 
 @dataclass
@@ -32,6 +34,7 @@ class VisionResult:
     has_human: bool
     has_fire: bool
     has_felling: bool
+    is_threat: bool
 
 
 def _parse_result(raw: str) -> VisionResult:
@@ -46,6 +49,7 @@ def _parse_result(raw: str) -> VisionResult:
         has_human=data.get("has_human", False),
         has_fire=data.get("has_fire", False),
         has_felling=data.get("has_felling", False),
+        is_threat=data.get("is_threat", False),
     )
 
 
@@ -116,6 +120,7 @@ def _stub_result() -> VisionResult:
         has_human=False,
         has_fire=False,
         has_felling=True,
+        is_threat=True,
     )
 
 

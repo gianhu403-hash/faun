@@ -95,6 +95,7 @@ async def handle_packet(packet: dict) -> None:
                 "has_human": vision.has_human,
                 "has_fire": vision.has_fire,
                 "has_felling": vision.has_felling,
+                "is_threat": vision.is_threat,
             }
         )
     else:
@@ -105,6 +106,7 @@ async def handle_packet(packet: dict) -> None:
             has_human=False,
             has_fire=False,
             has_felling=False,
+            is_threat=False,
         )
 
     print("Composing alert via YandexGPT...")
