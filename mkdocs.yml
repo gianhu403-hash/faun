@@ -1,0 +1,88 @@
+site_name: "Faun — Акустический мониторинг леса"
+site_description: "Техническая документация системы Faun: AI-мониторинг лесных нарушений"
+site_url: "http://81.85.73.178:8080"
+
+theme:
+  name: material
+  language: ru
+  palette:
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Тёмная тема
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Светлая тема
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+repo_name: "glebsem2005/ya_hve"
+repo_url: "https://github.com/glebsem2005/ya_hve"
+
+nav:
+  - Главная: index.md
+  - Архитектура: architecture.md
+  - ML Pipeline: ml-pipeline.md
+  - API Reference: api.md
+  - База данных: database.md
+  - Telegram-бот: telegram-bot.md
+  - Yandex Cloud: yandex-cloud.md
+  - Деплой: deployment.md
+  - Тестирование: testing.md
+  - Правовая база:
+    - legal/README.md
+    - Лесной кодекс РФ: legal/01a_lesnoy_kodeks_relevantye_glavy.md
+    - КоАП (лесные нарушения): legal/02_koap_lesnye_narusheniya.md
+    - УК РФ (ст. 260-261): legal/03_uk_rf_260_261.md
+    - Приказ № 955: legal/04_prikaz_955_lesnaya_ohrana.md
+    - ПП № 1730 (ущерб): legal/05_pp_1730_uscherb.md
+    - ПП № 1098 (контроль): legal/06_pp_1098_lesnoy_kontrol.md
+    - Лесной план (Нижний Новгород): legal/07_lesnoy_plan_nizhegorodskaya.md
+    - Госпрограмма (Нижний Новгород): legal/08_gosprogramma_les_nizhegorodskaya.md
+    - Региональная специфика: legal/09_nizhegorodskaya_specifika.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.keys
+  - admonition
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search:
+      lang: ru
+  - swagger-ui-tag
+
+extra:
+  social:
+    - icon: fontawesome/brands/telegram
+      link: https://t.me/ya_faun_bot
+      name: Telegram-бот
