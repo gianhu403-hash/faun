@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 *.sqlite
+*.csv
 .env
 
 # Security: prevent accidental commit of keys/certs
