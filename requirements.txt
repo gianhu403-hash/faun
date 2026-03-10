@@ -24,3 +24,6 @@ fpdf2>=2.7
 ydb>=3.0
 
 pytest>=7.4
+
+mkdocs-material>=9.5
+mkdocs-swagger-ui-tag>=0.6
