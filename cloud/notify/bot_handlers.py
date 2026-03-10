@@ -301,6 +301,11 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if incident.is_demo or dist <= PROXIMITY_RADIUS_M:
         incident.status = "on_site"
+        incident.arrived_at = time.time()
+        if incident.created_at:
+            incident.response_time_min = round(
+                (incident.arrived_at - incident.created_at) / 60, 1
+            )
         await send_arrival_question(chat_id, incident)
     else:
         await update.message.reply_text(
@@ -595,29 +600,30 @@ async def _generate_and_send_protocol(chat_id: int, incident) -> None:
 
     # 1. YandexGPT: raw report -> legal language
     try:
-        from cloud.agent.rag_agent import _call_yandex_plain
+        from cloud.agent.rag_agent import legalize_report
 
-        legal_prompt = (
-            f"Перепиши следующее описание нарушения юридическим языком "
-            f"для протокола об административном правонарушении. "
-            f"Тип нарушения: {incident.audio_class}.\n\n"
-            f"Описание инспектора: {incident.ranger_report_raw}"
+        incident.ranger_report_legal = await legalize_report(
+            incident.audio_class, incident.ranger_report_raw
         )
-        incident.ranger_report_legal = await _call_yandex_plain(legal_prompt)
     except Exception as e:
-        logger.warning("Failed to legalize report: %s", e)
+        logger.warning("Failed to legalize report via YandexGPT: %s", e)
         incident.ranger_report_legal = incident.ranger_report_raw
+        await bot.send_message(
+            chat_id=chat_id,
+            text="Не удалось обработать описание через YandexGPT, "
+            "используется исходный текст.",
+        )
 
-    # 2. RAG: get applicable legal articles
+    # 2. RAG: get applicable legal articles only
     legal_articles = ""
     try:
-        from cloud.agent.rag_agent import query_protocol
+        from cloud.agent.rag_agent import query_legal_articles
 
-        legal_articles = await query_protocol(
+        legal_articles = await query_legal_articles(
             incident.audio_class, incident.lat, incident.lon
         )
     except Exception as e:
-        logger.warning("RAG query for protocol failed: %s", e)
+        logger.warning("RAG query for legal articles failed: %s", e)
 
     # 3. Generate PDF
     try:
