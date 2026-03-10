@@ -80,6 +80,13 @@ def get_pool():
         raise
 
 
+def execute_query(session, sql: str, params: dict | None = None):
+    """Execute a parameterized YDB query with DECLARE-based type binding."""
+    if params:
+        return session.transaction().execute(sql, params, commit_tx=True)
+    return session.transaction().execute(sql, commit_tx=True)
+
+
 # ---------------------------------------------------------------------------
 # DDL statements
 # ---------------------------------------------------------------------------

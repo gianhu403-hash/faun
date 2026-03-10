@@ -109,13 +109,12 @@ async def _try_yandexgpt_vision(
 
 
 def _stub_result() -> VisionResult:
-    """Realistic stub for demo."""
+    """Safe fallback when all vision models are unavailable."""
     return VisionResult(
-        description="На снимке — участок хвойного леса с просекой, "
-        "видны следы свежей вырубки и колея от техники.",
+        description="Не удалось выполнить визуальный анализ (сервисы недоступны).",
         has_human=False,
         has_fire=False,
-        has_felling=True,
+        has_felling=False,
     )
 
 
