@@ -490,6 +490,72 @@
         .dark-popup .leaflet-popup-tip { background: #111318; }
         .leaflet-popup-close-button { color: #555 !important; }
         @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+        /* ---- Analytics page ---- */
+        .analytics-page {
+            flex-direction: column;
+            overflow: hidden;
+            padding: 16px 24px;
+            width: 100%;
+        }
+        .analytics-kpi {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        .analytics-iframe-wrap {
+            flex: 1;
+            position: relative;
+            border: 1px solid #1a1e2a;
+            border-radius: 2px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        .datalens-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: #0a0a0f;
+        }
+        .datalens-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #0d0d14;
+            color: #555;
+        }
+        .datalens-placeholder.hidden { display: none; }
+        .placeholder-icon { font-size: 48px; margin-bottom: 12px; }
+        .placeholder-text { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+        .placeholder-hint { font-size: 11px; color: #888; margin-top: 12px; text-align: center; line-height: 1.6; }
+        .analytics-actions {
+            margin-top: 12px;
+            flex-shrink: 0;
+            text-align: right;
+        }
+        .analytics-fullscreen-btn {
+            display: inline-block;
+            padding: 6px 16px;
+            border: 1px solid #1a1e2a;
+            background: #111318;
+            color: #888;
+            font-family: inherit;
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-decoration: none;
+            cursor: pointer;
+            border-radius: 1px;
+            transition: all 0.15s;
+        }
+        .analytics-fullscreen-btn:hover {
+            border-color: #3b82f6;
+            color: #3b82f6;
+        }
     </style>
 </head>
 <body>
@@ -498,6 +564,7 @@
         <div class="tab-btns">
             <button class="tab-btn active" id="tab-map" onclick="switchTab('map')">КАРТА</button>
             <button class="tab-btn" id="tab-stats" onclick="switchTab('stats')">СТАТ</button>
+            <button class="tab-btn" id="tab-analytics" onclick="switchTab('analytics')">АНАЛИТИКА</button>
         </div>
         <span class="ws-status" id="ws-status">&#9679; ОТКЛ</span>
         <span class="header-spacer"></span>
@@ -530,6 +597,25 @@
         <div class="stats-panel" id="stats-incidents">
             <div class="stats-panel-title">ПОСЛЕДНИЕ ИНЦИДЕНТЫ</div>
             <div id="incidents-body"></div>
+        </div>
+    </div>
+
+    <!-- Analytics page -->
+    <div class="page analytics-page" id="page-analytics">
+        <div class="analytics-kpi" id="analytics-kpi"></div>
+        <div class="analytics-iframe-wrap">
+            <iframe id="datalens-iframe" class="datalens-iframe" allowfullscreen></iframe>
+            <div class="datalens-placeholder" id="datalens-placeholder">
+                <div class="placeholder-icon">&#9776;</div>
+                <div class="placeholder-text">Загрузка DataLens...</div>
+                <div class="placeholder-hint" id="datalens-hint" style="display:none;">
+                    Дашборд требует авторизации.<br>
+                    <a href="" id="datalens-link" target="_blank" style="color:#3b82f6;">Открыть в DataLens</a>
+                </div>
+            </div>
+        </div>
+        <div class="analytics-actions">
+            <a href="/analytics" target="_blank" class="analytics-fullscreen-btn">ОТКРЫТЬ НА ВЕСЬ ЭКРАН &#8599;</a>
         </div>
     </div>
 
@@ -608,18 +694,78 @@
         }
 
         /* ---- Tab switching ---- */
+        var DATALENS_URL = 'https://datalens.ru/aaamlpcpp7acu';
+
         window.switchTab = function(tab) {
             document.getElementById('page-map').classList.toggle('active', tab === 'map');
             document.getElementById('page-stats').classList.toggle('active', tab === 'stats');
+            document.getElementById('page-analytics').classList.toggle('active', tab === 'analytics');
             document.getElementById('tab-map').classList.toggle('active', tab === 'map');
             document.getElementById('tab-stats').classList.toggle('active', tab === 'stats');
+            document.getElementById('tab-analytics').classList.toggle('active', tab === 'analytics');
             if (tab === 'map') {
                 setTimeout(function() { map.invalidateSize(); }, 100);
             }
             if (tab === 'stats') {
                 loadStats();
             }
+            if (tab === 'analytics') {
+                loadAnalytics();
+            }
         };
+
+        var analyticsLoaded = false;
+        function loadAnalytics() {
+            // Load KPI
+            fetch('/api/v1/datalens/stats').then(function(r) { return r.json(); }).then(function(stats) {
+                var kpiEl = document.getElementById('analytics-kpi');
+                kpiEl.textContent = '';
+                var total = stats.total_incidents || 0;
+                var avgTime = stats.avg_response_time_min || 0;
+                var detRate = stats.detection_rate || 0;
+                var kpis = [
+                    { value: total, label: 'ВСЕГО ИНЦИДЕНТОВ', cls: '' },
+                    { value: avgTime + ' мин', label: 'СР. ВРЕМЯ РЕАКЦИИ', cls: avgTime > 30 ? 'alert' : 'ok' },
+                    { value: detRate + '%', label: 'DETECTION RATE', cls: detRate > 50 ? 'ok' : 'warn' }
+                ];
+                kpis.forEach(function(k) {
+                    var card = document.createElement('div');
+                    card.className = 'kpi-card';
+                    var val = document.createElement('div');
+                    val.className = 'kpi-value' + (k.cls ? ' ' + k.cls : '');
+                    val.textContent = k.value;
+                    var lbl = document.createElement('div');
+                    lbl.className = 'kpi-label';
+                    lbl.textContent = k.label;
+                    card.appendChild(val);
+                    card.appendChild(lbl);
+                    kpiEl.appendChild(card);
+                });
+            }).catch(function() {});
+
+            // Load iframe once
+            if (!analyticsLoaded) {
+                var iframe = document.getElementById('datalens-iframe');
+                var placeholder = document.getElementById('datalens-placeholder');
+                var hint = document.getElementById('datalens-hint');
+                var link = document.getElementById('datalens-link');
+                link.href = DATALENS_URL;
+                iframe.src = DATALENS_URL;
+                iframe.onload = function() {
+                    placeholder.classList.add('hidden');
+                };
+                // Cross-origin iframes may not fire onload properly;
+                // show auth hint after timeout if placeholder is still visible
+                setTimeout(function() {
+                    if (!placeholder.classList.contains('hidden')) {
+                        hint.style.display = 'block';
+                        document.querySelector('.placeholder-text').textContent = 'DataLens';
+                    }
+                    placeholder.classList.add('hidden');
+                }, 4000);
+                analyticsLoaded = true;
+            }
+        }
 
         /* ---- Map ---- */
         var map = L.map('map', { zoomControl: false, attributionControl: false })
@@ -630,7 +776,10 @@
         }).addTo(map);
 
         /* ---- Load microphones ---- */
-        fetch('/api/v1/mics').then(function(r) { return r.json(); }).then(function(mics) {
+        fetch('/api/v1/mics').then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        }).then(function(mics) {
             var bounds = [];
             mics.forEach(function(m) {
                 var color, iconHtml;

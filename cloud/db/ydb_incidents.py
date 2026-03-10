@@ -87,8 +87,29 @@ class YDBIncidentRepository(IncidentRepository):
         district = get_district_name(lat, lon)
 
         def _ins(session):
-            session.transaction().execute(
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
                 """
+                DECLARE $id AS Utf8;
+                DECLARE $cls AS Utf8;
+                DECLARE $lat AS Double;
+                DECLARE $lon AS Double;
+                DECLARE $conf AS Double;
+                DECLARE $gate AS Utf8;
+                DECLARE $status AS Utf8;
+                DECLARE $chat_id AS Int64;
+                DECLARE $name AS Utf8;
+                DECLARE $at AS Double;
+                DECLARE $created_at AS Double;
+                DECLARE $district AS Utf8;
+                DECLARE $is_demo AS Bool;
+                DECLARE $arrived_at AS Double;
+                DECLARE $response_time_min AS Double;
+                DECLARE $report_raw AS Utf8;
+                DECLARE $report_legal AS Utf8;
+                DECLARE $resolution AS Utf8;
                 UPSERT INTO incidents (id, audio_class, lat, lon,
                     confidence, gating_level, status,
                     accepted_by_chat_id, accepted_by_name, accepted_at,
@@ -124,7 +145,6 @@ class YDBIncidentRepository(IncidentRepository):
                     "$report_legal": "",
                     "$resolution": "",
                 },
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_ins)
@@ -170,15 +190,17 @@ class YDBIncidentRepository(IncidentRepository):
 
         pool = get_pool()
 
-        # Build dynamic UPDATE statement
+        # Build dynamic UPDATE statement with DECLARE block
         set_clauses = []
         params = {"$id": incident_id}
+        declares = ["DECLARE $id AS Utf8;"]
         for field_name, value in ydb_fields.items():
             param_name = f"${field_name}"
+            ydb_type = _FIELD_TYPES.get(field_name, "Utf8")
             set_clauses.append(f"{field_name} = {param_name}")
+            declares.append(f"DECLARE {param_name} AS {ydb_type};")
             # Convert None to appropriate zero value for YDB
             if value is None:
-                ydb_type = _FIELD_TYPES.get(field_name, "Utf8")
                 if ydb_type == "Double":
                     params[param_name] = 0.0
                 elif ydb_type == "Int64":
@@ -190,10 +212,13 @@ class YDBIncidentRepository(IncidentRepository):
             else:
                 params[param_name] = value
 
-        sql = f"UPDATE incidents SET {', '.join(set_clauses)} WHERE id = $id"
+        declare_block = "\n".join(declares)
+        sql = f"{declare_block}\nUPDATE incidents SET {', '.join(set_clauses)} WHERE id = $id"
 
         def _upd(session):
-            session.transaction().execute(sql, params, commit_tx=True)
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(session, sql, params)
 
         pool.retry_operation_sync(_upd)
 
@@ -207,10 +232,12 @@ class YDBIncidentRepository(IncidentRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                "SELECT * FROM incidents WHERE id = $id",
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                "DECLARE $id AS Utf8; SELECT * FROM incidents WHERE id = $id",
                 {"$id": incident_id},
-                commit_tx=True,
             )
             rows = result[0].rows
             return self._row_to_incident(rows[0]) if rows else None
@@ -224,10 +251,11 @@ class YDBIncidentRepository(IncidentRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
                 "SELECT * FROM incidents ORDER BY created_at DESC",
-                {},
-                commit_tx=True,
             )
             return [self._row_to_incident(row) for row in result[0].rows]
 

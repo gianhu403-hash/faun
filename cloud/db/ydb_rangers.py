@@ -51,8 +51,19 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _add(session):
-            session.transaction().execute(
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
                 """
+                DECLARE $id AS Uint64;
+                DECLARE $name AS Utf8;
+                DECLARE $badge AS Utf8;
+                DECLARE $chat_id AS Int64;
+                DECLARE $lat_min AS Double;
+                DECLARE $lat_max AS Double;
+                DECLARE $lon_min AS Double;
+                DECLARE $lon_max AS Double;
                 UPSERT INTO rangers (id, name, badge_number, chat_id,
                     zone_lat_min, zone_lat_max, zone_lon_min, zone_lon_max, active)
                 VALUES ($id, $name, $badge, $chat_id,
@@ -68,7 +79,6 @@ class YDBRangerRepository(RangerRepository):
                     "$lon_min": zone_lon_min,
                     "$lon_max": zone_lon_max,
                 },
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_add)
@@ -90,10 +100,12 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _rm(session):
-            session.transaction().execute(
-                "DELETE FROM rangers WHERE chat_id = $cid",
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
+                "DECLARE $cid AS Int64; DELETE FROM rangers WHERE chat_id = $cid",
                 {"$cid": chat_id},
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_rm)
@@ -105,10 +117,12 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _upd(session):
-            session.transaction().execute(
-                "UPDATE rangers SET active = $active WHERE chat_id = $cid",
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
+                "DECLARE $active AS Bool; DECLARE $cid AS Int64; UPDATE rangers SET active = $active WHERE chat_id = $cid",
                 {"$active": active, "$cid": chat_id},
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_upd)
@@ -127,11 +141,14 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _upd(session):
-            session.transaction().execute(
-                """UPDATE rangers
-                   SET zone_lat_min = $lamin, zone_lat_max = $lamax,
-                       zone_lon_min = $lomin, zone_lon_max = $lomax
-                   WHERE chat_id = $cid""",
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
+                """DECLARE $lamin AS Double; DECLARE $lamax AS Double;
+                DECLARE $lomin AS Double; DECLARE $lomax AS Double; DECLARE $cid AS Int64;
+                UPDATE rangers SET zone_lat_min = $lamin, zone_lat_max = $lamax,
+                    zone_lon_min = $lomin, zone_lon_max = $lomax WHERE chat_id = $cid""",
                 {
                     "$lamin": lat_min,
                     "$lamax": lat_max,
@@ -139,7 +156,6 @@ class YDBRangerRepository(RangerRepository):
                     "$lomax": lon_max,
                     "$cid": chat_id,
                 },
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_upd)
@@ -169,13 +185,17 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                """SELECT * FROM rangers
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                """DECLARE $lat AS Double;
+                DECLARE $lon AS Double;
+                SELECT * FROM rangers
                    WHERE active = true
                      AND zone_lat_min <= $lat AND zone_lat_max >= $lat
                      AND zone_lon_min <= $lon AND zone_lon_max >= $lon""",
                 {"$lat": lat, "$lon": lon},
-                commit_tx=True,
             )
             return [self._row_to_ranger(row) for row in result[0].rows]
 
@@ -187,10 +207,12 @@ class YDBRangerRepository(RangerRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                "SELECT * FROM rangers WHERE chat_id = $cid",
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                "DECLARE $cid AS Int64; SELECT * FROM rangers WHERE chat_id = $cid",
                 {"$cid": chat_id},
-                commit_tx=True,
             )
             rows = result[0].rows
             return self._row_to_ranger(rows[0]) if rows else None

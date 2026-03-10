@@ -9,10 +9,7 @@ logger = logging.getLogger(__name__)
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
-GEMMA_URL = (
-    "https://llm.api.cloud.yandex.net/foundationModels/v1/openai/chat/completions"
-)
-GEMMA_MODEL = "gemma-3-27b-it"
+GEMMA_URL = "https://ai.api.cloud.yandex.net/v1/chat/completions"
 
 VISION_URL = os.getenv(
     "YANDEX_VISION_URL",
@@ -53,11 +50,11 @@ async def _try_gemma(client: httpx.AsyncClient, photo_b64: str) -> VisionResult:
     resp = await client.post(
         GEMMA_URL,
         headers={
-            "Authorization": f"Api-Key {YANDEX_API_KEY}",
-            "x-folder-id": YANDEX_FOLDER_ID,
+            "Authorization": f"Bearer {YANDEX_API_KEY}",
+            "OpenAI-Project": YANDEX_FOLDER_ID,
         },
         json={
-            "model": GEMMA_MODEL,
+            "model": f"gpt://{YANDEX_FOLDER_ID}/gemma-3-27b-it/latest",
             "messages": [
                 {
                     "role": "user",

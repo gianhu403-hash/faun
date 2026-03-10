@@ -12,6 +12,7 @@ import os
 import random
 
 from cloud.db.base import MicrophoneRepository
+from cloud.db.ydb_client import execute_query
 from cloud.db.microphones import (
     Microphone,
     ZONE_TYPES,
@@ -113,8 +114,19 @@ class YDBMicrophoneRepository(MicrophoneRepository):
                 _bp=battery,
                 _ia=installed_at,
             ):
-                session.transaction().execute(
+                execute_query(
+                    session,
                     """
+                    DECLARE $id AS Uint64;
+                    DECLARE $uid AS Utf8;
+                    DECLARE $lat AS Double;
+                    DECLARE $lon AS Double;
+                    DECLARE $zt AS Utf8;
+                    DECLARE $sd AS Utf8;
+                    DECLARE $st AS Utf8;
+                    DECLARE $bp AS Double;
+                    DECLARE $ds AS Utf8;
+                    DECLARE $ia AS Utf8;
                     UPSERT INTO microphones (id, mic_uid, lat, lon,
                         zone_type, sub_district, status,
                         battery_pct, district_slug, installed_at)
@@ -134,7 +146,6 @@ class YDBMicrophoneRepository(MicrophoneRepository):
                         "$ds": "varnavino",
                         "$ia": _ia,
                     },
-                    commit_tx=True,
                 )
 
             pool.retry_operation_sync(_ins)
@@ -160,29 +171,35 @@ class YDBMicrophoneRepository(MicrophoneRepository):
     # read
     # ------------------------------------------------------------------
 
-    def get_all(self) -> list[Microphone]:
+    def get_all(self, limit: int = 1000) -> list[Microphone]:
         from cloud.db.ydb_client import get_pool
 
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                "SELECT * FROM microphones",
-                commit_tx=True,
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                "DECLARE $lim AS Uint64; SELECT * FROM microphones LIMIT $lim",
+                {"$lim": limit},
             )
             return [self._row_to_mic(row) for row in result[0].rows]
 
         return pool.retry_operation_sync(_q)
 
-    def get_online(self) -> list[Microphone]:
+    def get_online(self, limit: int = 100) -> list[Microphone]:
         from cloud.db.ydb_client import get_pool
 
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                "SELECT * FROM microphones WHERE status = 'online'",
-                commit_tx=True,
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                f"DECLARE $lim AS Uint64; SELECT * FROM microphones WHERE status = 'online' LIMIT $lim",
+                {"$lim": limit},
             )
             return [self._row_to_mic(row) for row in result[0].rows]
 
@@ -194,10 +211,10 @@ class YDBMicrophoneRepository(MicrophoneRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                "SELECT * FROM microphones WHERE mic_uid = $uid",
+            result = execute_query(
+                session,
+                "DECLARE $uid AS Utf8; SELECT * FROM microphones WHERE mic_uid = $uid",
                 {"$uid": mic_uid},
-                commit_tx=True,
             )
             rows = result[0].rows
             return self._row_to_mic(rows[0]) if rows else None
@@ -217,10 +234,10 @@ class YDBMicrophoneRepository(MicrophoneRepository):
         pool = get_pool()
 
         def _upd(session):
-            session.transaction().execute(
-                "UPDATE microphones SET status = $st WHERE mic_uid = $uid",
+            execute_query(
+                session,
+                "DECLARE $st AS Utf8; DECLARE $uid AS Utf8; UPDATE microphones SET status = $st WHERE mic_uid = $uid",
                 {"$st": status, "$uid": mic_uid},
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_upd)
@@ -233,10 +250,10 @@ class YDBMicrophoneRepository(MicrophoneRepository):
         clamped = min(max(battery_pct, 0.0), 100.0)
 
         def _upd(session):
-            session.transaction().execute(
-                "UPDATE microphones SET battery_pct = $bp WHERE mic_uid = $uid",
+            execute_query(
+                session,
+                "DECLARE $bp AS Double; DECLARE $uid AS Utf8; UPDATE microphones SET battery_pct = $bp WHERE mic_uid = $uid",
                 {"$bp": clamped, "$uid": mic_uid},
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_upd)

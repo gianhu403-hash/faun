@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from cloud.notify.bot_app import start_bot, stop_bot
 from cloud.notify.drone_bot_app import start_drone_bot, stop_drone_bot
@@ -81,6 +81,12 @@ async def lifespan(app):
 app = FastAPI(title="ForestGuard", lifespan=lifespan)
 
 
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc):
+    logger.exception("Unhandled error on %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -117,6 +123,12 @@ async def websocket_endpoint(ws: WebSocket):
 @app.get("/")
 async def index():
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text())
+
+
+@app.get("/analytics")
+async def analytics_page():
+    """Full-screen DataLens analytics page."""
+    return HTMLResponse((FRONTEND_DIR / "analytics.html").read_text())
 
 
 # ---- REST API v1 — designed for React/Flutter frontends ----
@@ -471,7 +483,10 @@ from cloud.db.microphones import (
 )
 
 # Seed microphones on startup
-seed_microphones()
+try:
+    seed_microphones()
+except Exception:
+    logger.warning("Failed to seed microphones on startup")
 
 
 class MicStatusUpdate(BaseModel):

@@ -81,8 +81,19 @@ class YDBPermitRepository(PermitRepository):
         _next_permit_id += 1
 
         def _add(session):
-            session.transaction().execute(
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
                 """
+                DECLARE $id AS Uint64;
+                DECLARE $desc AS Utf8;
+                DECLARE $lat_min AS Double;
+                DECLARE $lat_max AS Double;
+                DECLARE $lon_min AS Double;
+                DECLARE $lon_max AS Double;
+                DECLARE $vfrom AS Utf8;
+                DECLARE $vuntil AS Utf8;
                 UPSERT INTO permits (id, description,
                     zone_lat_min, zone_lat_max, zone_lon_min, zone_lon_max,
                     valid_from, valid_until)
@@ -100,7 +111,6 @@ class YDBPermitRepository(PermitRepository):
                     "$vfrom": valid_from.isoformat(),
                     "$vuntil": valid_until.isoformat(),
                 },
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_add)
@@ -121,10 +131,12 @@ class YDBPermitRepository(PermitRepository):
         pool = get_pool()
 
         def _rm(session):
-            session.transaction().execute(
-                "DELETE FROM permits WHERE id = $pid",
+            from cloud.db.ydb_client import execute_query
+
+            execute_query(
+                session,
+                "DECLARE $pid AS Uint64; DELETE FROM permits WHERE id = $pid",
                 {"$pid": permit_id},
-                commit_tx=True,
             )
 
         pool.retry_operation_sync(_rm)
@@ -160,14 +172,19 @@ class YDBPermitRepository(PermitRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                """SELECT id FROM permits
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                """DECLARE $lat AS Double;
+                DECLARE $lon AS Double;
+                DECLARE $d AS Utf8;
+                SELECT id FROM permits
                    WHERE zone_lat_min <= $lat AND zone_lat_max >= $lat
                      AND zone_lon_min <= $lon AND zone_lon_max >= $lon
                      AND valid_from <= $d AND valid_until >= $d
                    LIMIT 1""",
                 {"$lat": lat, "$lon": lon, "$d": d},
-                commit_tx=True,
             )
             return len(result[0].rows) > 0
 
@@ -185,13 +202,18 @@ class YDBPermitRepository(PermitRepository):
         pool = get_pool()
 
         def _q(session):
-            result = session.transaction().execute(
-                """SELECT * FROM permits
+            from cloud.db.ydb_client import execute_query
+
+            result = execute_query(
+                session,
+                """DECLARE $lat AS Double;
+                DECLARE $lon AS Double;
+                DECLARE $d AS Utf8;
+                SELECT * FROM permits
                    WHERE zone_lat_min <= $lat AND zone_lat_max >= $lat
                      AND zone_lon_min <= $lon AND zone_lon_max >= $lon
                      AND valid_from <= $d AND valid_until >= $d""",
                 {"$lat": lat, "$lon": lon, "$d": d},
-                commit_tx=True,
             )
             return [self._row_to_permit(row) for row in result[0].rows]
 
