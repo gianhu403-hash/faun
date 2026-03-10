@@ -24,6 +24,7 @@ from cloud.db.rangers import (
     add_ranger,
     get_rangers_for_location,
     init_db as init_rangers_db,
+    _migrate_db as migrate_rangers_db,
 )
 from cloud.db.permits import (
     add_permit,
@@ -67,6 +68,7 @@ def _fresh_state(tmp_path, monkeypatch):
     monkeypatch.setenv("PERMITS_DB_PATH", str(tmp_path / "permits.sqlite"))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     init_rangers_db()
+    migrate_rangers_db()
     init_permits_db()
     _last_sent.clear()
 
@@ -211,7 +213,7 @@ class TestTelegramDelivery:
         mock_bot.send_message.assert_called_once()
         call_kwargs = mock_bot.send_message.call_args
         assert call_kwargs.kwargs["chat_id"] == 7001
-        assert "chainsaw" in call_kwargs.kwargs["text"]
+        assert "Бензопила" in call_kwargs.kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_pending_alert_silent_outside_zone(self, mock_bot):

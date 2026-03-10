@@ -14,7 +14,7 @@ _tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
 _tmp.close()
 os.environ["RANGERS_DB_PATH"] = _tmp.name
 
-from cloud.db.rangers import init_db, add_ranger, get_ranger_by_chat_id
+from cloud.db.rangers import init_db, _migrate_db, add_ranger, get_ranger_by_chat_id
 from cloud.db.incidents import (
     Incident,
     _incidents,
@@ -139,6 +139,7 @@ def _fresh_state():
     conn.commit()
     conn.close()
     init_db()
+    _migrate_db()
     _incidents.clear()
     _chat_to_incident.clear()
     _registration_state.clear()

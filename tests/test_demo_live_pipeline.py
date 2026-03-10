@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from cloud.agent.decision import Alert
-from cloud.db.rangers import add_ranger, get_rangers_for_location, init_db as init_rangers_db
+from cloud.db.rangers import add_ranger, get_rangers_for_location, init_db as init_rangers_db, _migrate_db as migrate_rangers_db
 from cloud.db.permits import add_permit, has_valid_permit, init_db as init_permits_db
 from cloud.notify.districts import DISTRICTS
 from cloud.notify.telegram import (
@@ -87,6 +87,7 @@ def _fresh_state(tmp_path, monkeypatch):
     monkeypatch.setenv("PERMITS_DB_PATH", str(tmp_path / "permits.sqlite"))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     init_rangers_db()
+    migrate_rangers_db()
     init_permits_db()
     _last_sent.clear()
 

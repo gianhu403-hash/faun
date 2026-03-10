@@ -45,6 +45,7 @@ def _clean_db():
     conn.commit()
     conn.close()
     init_db()
+    _migrate_db()
     _registration_state.clear()
     yield
 

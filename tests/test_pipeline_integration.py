@@ -19,6 +19,7 @@ from cloud.db.rangers import (
     add_ranger,
     get_rangers_for_location,
     init_db as init_rangers_db,
+    _migrate_db as migrate_rangers_db,
 )
 from cloud.db.permits import (
     add_permit,
@@ -47,6 +48,7 @@ def _fresh_dbs(tmp_path, monkeypatch):
     monkeypatch.setenv("RANGERS_DB_PATH", str(tmp_path / "rangers.sqlite"))
     monkeypatch.setenv("PERMITS_DB_PATH", str(tmp_path / "permits.sqlite"))
     init_rangers_db()
+    migrate_rangers_db()
     init_permits_db()
 
 

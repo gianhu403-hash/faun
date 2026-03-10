@@ -22,6 +22,7 @@ from cloud.db.rangers import (
     get_ranger_by_chat_id,
     get_rangers_for_location,
     init_db,
+    _migrate_db,
     remove_ranger,
     set_active,
     update_zone,
@@ -38,6 +39,7 @@ def _clean_db():
     conn.commit()
     conn.close()
     init_db()
+    _migrate_db()
     yield
 
 
