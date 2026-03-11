@@ -45,6 +45,8 @@ YAMNET_CLASS_MAP = {
     "Bus": "engine",
     "Chop": "axe",
     "Wood": "axe",
+    "Whack, thwack": "axe",
+    "Thump, thud": "axe",
     "Fire": "fire",
     "Crackle": "fire",
     "Fire alarm": "fire",

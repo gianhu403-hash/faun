@@ -314,3 +314,15 @@ class TestClassMapExpanded:
         from edge.audio.classifier import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Tools") == "chainsaw"
+
+    def test_class_map_whack_maps_to_axe(self) -> None:
+        """'Whack, thwack' AudioSet class should map to 'axe'."""
+        from edge.audio.classifier import YAMNET_CLASS_MAP
+
+        assert YAMNET_CLASS_MAP.get("Whack, thwack") == "axe"
+
+    def test_class_map_thump_maps_to_axe(self) -> None:
+        """'Thump, thud' AudioSet class should map to 'axe'."""
+        from edge.audio.classifier import YAMNET_CLASS_MAP
+
+        assert YAMNET_CLASS_MAP.get("Thump, thud") == "axe"
