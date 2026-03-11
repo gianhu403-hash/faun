@@ -46,7 +46,7 @@
             padding: 6px 14px;
             border: 1px solid #1a1e2a;
             background: #111318;
-            color: #555;
+            color: #9a9aa8;
             font-family: inherit;
             font-size: 13px;
             letter-spacing: 1px;
@@ -124,7 +124,8 @@
             left: 12px;
             z-index: 1000;
             max-height: 280px;
-            width: 560px;
+            width: calc(100% - 24px);
+            max-width: 560px;
             overflow-y: auto;
             display: flex;
             flex-direction: column-reverse;
@@ -664,7 +665,7 @@
                 }
                 var bat = m.battery_pct !== undefined ? m.battery_pct.toFixed(0) + '%' : '?';
                 var popupEl = document.createElement('div');
-                popupEl.style.cssText = 'font-family:monospace;font-size:11px;line-height:1.6;';
+                popupEl.style.cssText = 'font-family:monospace;font-size:13px;line-height:1.6;';
                 var b = document.createElement('b');
                 b.textContent = m.mic_uid;
                 popupEl.appendChild(b);
@@ -784,12 +785,12 @@
         function buildDecision(d) {
             var frag = document.createDocumentFragment();
             var reason = document.createElement('div');
-            reason.style.fontSize = '12px';
+            reason.style.fontSize = '14px';
             reason.textContent = d.reason;
             frag.appendChild(reason);
 
             var drone = document.createElement('div');
-            drone.style.cssText = 'font-size:11px;color:#555;margin-top:4px;';
+            drone.style.cssText = 'font-size:13px;color:#555;margin-top:4px;';
             var droneLabel = document.createTextNode('Дрон: ');
             var droneVal = document.createElement('span');
             droneVal.style.color = d.send_drone ? '#00ff41' : '#444';
@@ -888,7 +889,7 @@
                 wsStatus.className = 'ws-status';
                 setTimeout(connect, 2000);
             };
-            ws.onmessage = function(e) { handleEvent(JSON.parse(e.data)); };
+            ws.onmessage = function(e) { try { handleEvent(JSON.parse(e.data)); } catch(err) { console.error('WS parse error:', err); } };
         }
         connect();
 
@@ -913,6 +914,7 @@
                 }
 
                 case 'source_point': {
+                    if (typeof d.lat !== 'number' || typeof d.lon !== 'number') break;
                     var srcIcon = L.divIcon({
                         html: '<div style="width:16px;height:16px;border-radius:50%;background:#ff2020;border:2px solid #ff6060;animation:pulse 1s infinite;"></div>',
                         iconSize: [16, 16], className: ''
@@ -939,6 +941,7 @@
                 }
 
                 case 'location_found': {
+                    if (typeof d.lat !== 'number' || typeof d.lon !== 'number') break;
                     incident.lat = d.lat;
                     incident.lon = d.lon;
                     incident.error_m = d.error_m;
@@ -1031,7 +1034,7 @@
         }
 
         function applyBold(escapedText) {
-            return escapedText.replace(/\*\*(.+?)\*\*/g, '<span class="rag-bold">$1</span>');
+            return escapedText.replace(/\*\*(.+?)\*\*/g, function(match, p1) { return '<span class="rag-bold">' + p1 + '</span>'; });
         }
 
         function formatRAGResponse(text) {

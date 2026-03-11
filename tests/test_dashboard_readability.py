@@ -33,10 +33,10 @@ def test_sidebar_width(html):
 
 
 def test_events_log_size(html):
-    """Events log must be wide and tall enough to read comfortably."""
-    width = _css_px(html, r"\.events-log\s*\{[^}]*width:\s*(\d+)px")
+    """Events log must have max-width and be tall enough to read comfortably."""
+    max_w = _css_px(html, r"\.events-log\s*\{[^}]*max-width:\s*(\d+)px")
     max_h = _css_px(html, r"\.events-log\s*\{[^}]*max-height:\s*(\d+)px")
-    assert width >= 520, f"Events-log width {width}px too narrow (min 520px)"
+    assert max_w >= 520, f"Events-log max-width {max_w}px too narrow (min 520px)"
     assert max_h >= 260, f"Events-log max-height {max_h}px too short (min 260px)"
 
 
@@ -62,3 +62,73 @@ def test_header_size(html):
     logo = _css_px(html, r"\.logo\s*\{[^}]*font-size:\s*(\d+)px")
     assert height >= 48, f"Header height {height}px too short (min 48px)"
     assert logo >= 18, f"Logo font {logo}px too small (min 18px)"
+
+
+# --- P0/P1 regression guards ---
+
+
+def _script_block(html: str) -> str:
+    """Extract the main <script> block content."""
+    m = re.search(r"<script>(.*)</script>", html, re.DOTALL)
+    assert m, "No <script> block found"
+    return m.group(1)
+
+
+def test_ws_onmessage_has_try_catch(html):
+    """ws.onmessage must wrap JSON.parse in try/catch to prevent crashes."""
+    script = _script_block(html)
+    m = re.search(r"ws\.onmessage\s*=\s*function.*?\{(.*?)\};", script, re.DOTALL)
+    assert m, "ws.onmessage handler not found"
+    body = m.group(1)
+    assert "try" in body and "catch" in body, (
+        "ws.onmessage must wrap JSON.parse in try/catch"
+    )
+
+
+def test_handle_event_validates_source_point_coords(html):
+    """case 'source_point' must validate d.lat/d.lon before use."""
+    script = _script_block(html)
+    m = re.search(r"case\s+['\"]source_point['\"].*?break;", script, re.DOTALL)
+    assert m, "case 'source_point' not found"
+    block = m.group(0)
+    assert "typeof d.lat" in block, "source_point must validate d.lat type before use"
+
+
+def test_handle_event_validates_location_coords(html):
+    """case 'location_found' must validate d.lat/d.lon before use."""
+    script = _script_block(html)
+    m = re.search(r"case\s+['\"]location_found['\"].*?break;", script, re.DOTALL)
+    assert m, "case 'location_found' not found"
+    block = m.group(0)
+    assert "typeof d.lat" in block, "location_found must validate d.lat type before use"
+
+
+def test_apply_bold_uses_function_replacer(html):
+    """applyBold must use a function replacer, not a string with $1."""
+    script = _script_block(html)
+    m = re.search(r"function\s+applyBold.*?\}", script, re.DOTALL)
+    assert m, "applyBold function not found"
+    body = m.group(0)
+    assert "function(" in body or "function (" in body, (
+        "applyBold .replace() must use a function replacer"
+    )
+    assert "'$1'" not in body and '"$1"' not in body, (
+        "applyBold must not use string '$1' — use function replacer"
+    )
+
+
+def test_inline_js_font_sizes_minimum(html):
+    """All font-size values inside <script> must be >= 13px."""
+    script = _script_block(html)
+    sizes = re.findall(r"font-size[:\s]*['\"]?(\d+)px", script)
+    for s in sizes:
+        assert int(s) >= 13, f"Inline JS font-size {s}px is below minimum 13px"
+
+
+def test_events_log_responsive_width(html):
+    """Events log must use calc() width and max-width for responsiveness."""
+    m = re.search(r"\.events-log\s*\{([^}]*)\}", html)
+    assert m, ".events-log CSS block not found"
+    block = m.group(1)
+    assert "max-width" in block, ".events-log must have max-width"
+    assert "calc(" in block, ".events-log width must use calc() for responsiveness"

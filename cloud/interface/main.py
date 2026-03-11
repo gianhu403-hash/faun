@@ -92,7 +92,13 @@ async def protocol_pdf(incident_id: str):
                 incident_id,
             )
 
-        pdf_bytes = generate_protocol(incident, legal_articles)
+        try:
+            pdf_bytes = generate_protocol(incident, legal_articles)
+        except Exception:
+            logger.exception("PDF generation failed for incident %s", incident_id)
+            return JSONResponse(
+                status_code=500, content={"error": "PDF generation failed"}
+            )
         update_incident(incident_id, protocol_pdf=pdf_bytes)
 
     return Response(

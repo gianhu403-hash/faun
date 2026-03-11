@@ -152,6 +152,7 @@ async def drone_photo_handler(
                         "audio_class": audio_class,
                         "lat": lat,
                         "lon": lon,
+                        "incident_id": incident.id if incident else None,
                     }
                 )
                 await broadcast({"event": "pipeline_end", "reason": "incident_created"})

@@ -6,6 +6,11 @@ Behaviors:
 3. Generates PDF on the fly with RAG legal articles
 4. Generates without RAG on RAG failure (timeout/error)
 5. Caches generated PDF in incident after generation
+6. Cached PDF skips RAG call entirely
+7. generate_protocol exception → 500
+8. RAG httpx.ConnectError → fallback (empty legal_articles)
+9. Filename in Content-Disposition contains incident_id
+11. protocol_pdf in YDB persistable fields
 """
 
 from __future__ import annotations
@@ -154,3 +159,90 @@ class TestProtocolPdfEndpoint:
 
         updated = get_incident(inc.id)
         assert updated.protocol_pdf == PDF_BYTES
+
+    @pytest.mark.asyncio
+    async def test_protocol_pdf_cached_skips_rag(self, client):
+        """Cached PDF must NOT call query_legal_articles (regression)."""
+        from cloud.db.incidents import create_incident, update_incident
+
+        inc = create_incident("chainsaw", 57.3, 45.0, 0.92, "alert")
+        update_incident(inc.id, protocol_pdf=PDF_BYTES)
+
+        with patch(
+            "cloud.interface.main.query_legal_articles",
+            new_callable=AsyncMock,
+        ) as mock_rag:
+            resp = await client.get(f"/api/v1/incidents/{inc.id}/protocol.pdf")
+
+        assert resp.status_code == 200
+        mock_rag.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_protocol_pdf_returns_500_on_generation_error(self, client):
+        """generate_protocol raises → endpoint returns 500."""
+        from cloud.db.incidents import create_incident
+
+        inc = create_incident("gunshot", 57.2, 44.8, 0.85, "alert")
+
+        with (
+            patch(
+                "cloud.interface.main.query_legal_articles",
+                new_callable=AsyncMock,
+                return_value="",
+            ),
+            patch(
+                "cloud.interface.main.generate_protocol",
+                side_effect=RuntimeError("PDF generation failed"),
+            ),
+        ):
+            resp = await client.get(f"/api/v1/incidents/{inc.id}/protocol.pdf")
+
+        assert resp.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_protocol_pdf_handles_rag_connection_error(self, client):
+        """RAG httpx.ConnectError → fallback to empty legal_articles."""
+        import httpx
+
+        from cloud.db.incidents import create_incident
+
+        inc = create_incident("engine", 57.4, 45.1, 0.78, "verify")
+
+        with (
+            patch(
+                "cloud.interface.main.query_legal_articles",
+                new_callable=AsyncMock,
+                side_effect=httpx.ConnectError("Connection refused"),
+            ),
+            patch(
+                "cloud.interface.main.generate_protocol",
+                return_value=PDF_BYTES,
+            ) as mock_gen,
+        ):
+            resp = await client.get(f"/api/v1/incidents/{inc.id}/protocol.pdf")
+
+        assert resp.status_code == 200
+        mock_gen.assert_called_once_with(inc, "")
+
+    @pytest.mark.asyncio
+    async def test_protocol_pdf_filename_contains_incident_id(self, client):
+        """Content-Disposition filename must include incident_id."""
+        from cloud.db.incidents import create_incident, update_incident
+
+        inc = create_incident("chainsaw", 57.3, 45.0, 0.90, "alert")
+        update_incident(inc.id, protocol_pdf=PDF_BYTES)
+
+        resp = await client.get(f"/api/v1/incidents/{inc.id}/protocol.pdf")
+
+        assert resp.status_code == 200
+        disposition = resp.headers["content-disposition"]
+        assert inc.id in disposition
+
+
+class TestProtocolPdfYdbFields:
+    def test_protocol_pdf_in_ydb_persistable_fields(self):
+        """protocol_pdf must be in YDB _YDB_PERSISTABLE and _FIELD_TYPES."""
+        from cloud.db.ydb_incidents import _YDB_PERSISTABLE, _FIELD_TYPES
+
+        assert "protocol_pdf" in _YDB_PERSISTABLE
+        assert "protocol_pdf" in _FIELD_TYPES

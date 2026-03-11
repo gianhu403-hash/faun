@@ -35,6 +35,7 @@ _YDB_PERSISTABLE = frozenset(
         "resolution_details",
         "is_demo",
         "created_at",
+        "protocol_pdf",
     }
 )
 
@@ -52,6 +53,7 @@ _FIELD_TYPES: dict[str, str] = {
     "resolution_details": "Utf8",
     "is_demo": "Bool",
     "created_at": "Double",
+    "protocol_pdf": "String",
 }
 
 

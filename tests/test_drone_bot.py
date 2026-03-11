@@ -380,6 +380,51 @@ class TestDroneBot:
         mock_compose_alert.assert_not_called()
 
     @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
+    @patch("cloud.notify.telegram.send_confirmed", new_callable=AsyncMock)
+    @patch(
+        "cloud.agent.decision.compose_alert",
+        new_callable=AsyncMock,
+        return_value="Alert text",
+    )
+    @patch("cloud.notify.telegram.send_pending", new_callable=AsyncMock)
+    @patch("cloud.vision.classifier.classify_photo", new_callable=AsyncMock)
+    async def test_drone_bot_broadcast_includes_incident_id(
+        self,
+        mock_classify,
+        mock_send_pending,
+        mock_compose_alert,
+        mock_send_confirmed,
+        mock_broadcast,
+    ):
+        """alert_sent broadcast must include incident_id."""
+        result = MagicMock()
+        result.description = "Рубка деревьев"
+        result.has_felling = True
+        result.has_human = False
+        result.has_fire = False
+        result.has_machinery = False
+        result.is_threat = True
+        mock_classify.return_value = result
+        incident_mock = MagicMock()
+        incident_mock.id = "inc-42"
+        mock_send_pending.return_value = incident_mock
+
+        update = _make_photo_update(1200)
+        await drone_photo_handler(update, MagicMock())
+
+        # Find the alert_sent broadcast
+        alert_call = None
+        for call in mock_broadcast.call_args_list:
+            msg = call[0][0]
+            if isinstance(msg, dict) and msg.get("event") == "alert_sent":
+                alert_call = msg
+                break
+        assert alert_call is not None, "alert_sent broadcast not found"
+        assert "incident_id" in alert_call
+        assert alert_call["incident_id"] == "inc-42"
+
+    @pytest.mark.asyncio
     @patch(
         "cloud.vision.classifier.classify_photo",
         new_callable=AsyncMock,
