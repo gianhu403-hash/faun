@@ -38,7 +38,7 @@
 | Код | `/var/www/ya_hve`, ветка `main` |
 | Docker | docker compose v2 (2.34.0) |
 | Сервисы | cloud (:8000), edge, lora_gateway (:9000) |
-| ОС | Ubuntu 22.04, 1.9 GB RAM |
+| ОС | Ubuntu 22.04, 3.8 GB RAM |
 | Модель | YAMNet v7 загружена и работает |
 
 ## ML Pipeline

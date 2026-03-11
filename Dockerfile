@@ -10,11 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     fonts-dejavu-core \
     build-essential \
-    # TODO: uncomment when VPS has enough RAM for texlive (~800 MB)
-    # texlive-luatex \
-    # texlive-latex-extra \
-    # texlive-lang-cyrillic \
-    # fonts-paratype \
+    texlive-luatex \
+    texlive-latex-extra \
+    texlive-lang-cyrillic \
+    fonts-paratype \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
