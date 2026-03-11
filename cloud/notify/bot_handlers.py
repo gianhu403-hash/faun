@@ -493,6 +493,7 @@ async def handle_inspector_photo(
             photo_file = await update.message.photo[-1].get_file()
             photo_bytes = await photo_file.download_as_bytearray()
             incident.ranger_photo_b64 = base64.b64encode(photo_bytes).decode()
+            update_incident(incident.id, ranger_photo_b64=incident.ranger_photo_b64)
 
             # Check for caption as report text
             if update.message.caption:

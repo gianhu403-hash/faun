@@ -298,27 +298,43 @@ def generate_protocol(incident: Incident, legal_articles: str = "") -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _generate_fpdf2_fallback(incident: Incident, legal_articles: str = "") -> bytes:
-    """Minimal PDF using fpdf2 when lualatex is unavailable."""
-    from fpdf import FPDF
-
-    _FONT_PATHS = [
+def _find_dejavu_font() -> str | None:
+    """Find DejaVuSans.ttf across common locations."""
+    candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/app/fonts/DejaVuSans.ttf",
     ]
+    # matplotlib bundles DejaVu
+    try:
+        import matplotlib
+
+        mpl_fonts = os.path.join(
+            os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf"
+        )
+        candidates.append(os.path.join(mpl_fonts, "DejaVuSans.ttf"))
+    except ImportError:
+        pass
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _generate_fpdf2_fallback(incident: Incident, legal_articles: str = "") -> bytes:
+    """Minimal PDF using fpdf2 when lualatex is unavailable."""
+    from fpdf import FPDF
 
     pdf = FPDF()
     pdf.add_page()
 
     font_name = "Helvetica"
-    for fpath in _FONT_PATHS:
-        if os.path.exists(fpath):
-            pdf.add_font("DejaVu", "", fpath, uni=True)
-            bold_path = fpath.replace("DejaVuSans", "DejaVuSans-Bold")
-            if os.path.exists(bold_path):
-                pdf.add_font("DejaVu", "B", bold_path, uni=True)
-            font_name = "DejaVu"
-            break
+    dejavu_path = _find_dejavu_font()
+    if dejavu_path:
+        pdf.add_font("DejaVu", "", dejavu_path)
+        bold_path = dejavu_path.replace("DejaVuSans", "DejaVuSans-Bold")
+        if os.path.exists(bold_path):
+            pdf.add_font("DejaVu", "B", bold_path)
+        font_name = "DejaVu"
 
     now = datetime.now()
     violation_type = CLASS_NAME_RU.get(incident.audio_class, incident.audio_class)
@@ -386,6 +402,22 @@ def _generate_fpdf2_fallback(incident: Incident, legal_articles: str = "") -> by
         pdf.cell(0, 7, text="Правовая база:", new_x="LMARGIN", new_y="NEXT")
         pdf.set_font(font_name, "", 10)
         pdf.multi_cell(0, 6, text=legal_articles)
+
+    # Embed photos
+    for label, b64_data in [
+        ("Снимок с дрона:", incident.drone_photo_b64),
+        ("Фото инспектора:", incident.ranger_photo_b64),
+    ]:
+        if b64_data:
+            img_path = _save_b64_image(b64_data, tempfile.gettempdir(), label[:5])
+            if img_path:
+                pdf.ln(4)
+                pdf.set_font(font_name, "B", 10)
+                pdf.cell(0, 7, text=label, new_x="LMARGIN", new_y="NEXT")
+                try:
+                    pdf.image(img_path, w=80)
+                except Exception as exc:
+                    logger.warning("fpdf2: failed to embed image: %s", exc)
 
     pdf.ln(10)
     pdf.cell(

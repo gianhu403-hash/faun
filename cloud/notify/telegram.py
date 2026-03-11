@@ -317,6 +317,14 @@ async def send_confirmed(
 
             incident.drone_photo_b64 = base64.b64encode(photo_bytes).decode()
         incident.drone_comment = alert.text
+        # Persist to DB (critical for YDB backend)
+        from cloud.db.incidents import update_incident
+
+        update_incident(
+            incident.id,
+            drone_photo_b64=incident.drone_photo_b64,
+            drone_comment=incident.drone_comment,
+        )
         return
 
     # Fallback: direct send (legacy behavior without incident workflow)
