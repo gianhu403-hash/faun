@@ -122,6 +122,20 @@ def triangulation_result_factory() -> Callable[..., TriangulationResult]:
 
 
 @pytest.fixture
+def hexagon_mics() -> list[MicPosition]:
+    """Six mics in hexagonal pattern (~100m radius)."""
+    center_lat, center_lon = 55.7514, 37.6138
+    r_lat, r_lon = 0.000898, 0.001572
+    return [
+        MicPosition(
+            lat=center_lat + r_lat * np.sin(np.radians(a)),
+            lon=center_lon + r_lon * np.cos(np.radians(a)),
+        )
+        for a in [0, 60, 120, 180, 240, 300]
+    ]
+
+
+@pytest.fixture
 def triangle_mics() -> list[MicPosition]:
     """Three microphones forming a roughly equilateral triangle (~100 m sides).
 

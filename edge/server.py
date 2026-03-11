@@ -33,6 +33,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+N_MICS = int(os.getenv("TDOA_N_MICS", "6"))
+
+
 def _load_mic_positions() -> list[MicPosition]:
     """Load microphone positions from database, fallback to env vars."""
     try:
@@ -40,8 +43,7 @@ def _load_mic_positions() -> list[MicPosition]:
 
         online_mics = get_online()
         if len(online_mics) >= 3:
-            # Use first 3 online mics for TDOA triangulation
-            return [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics[:3]]
+            return [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics[:N_MICS]]
         logger.warning(
             "Only %d online mics in DB, falling back to env vars", len(online_mics)
         )

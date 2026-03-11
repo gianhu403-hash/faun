@@ -16,15 +16,19 @@ API_URL = os.getenv(
 )
 
 SYSTEM_PROMPT = """
-Ты — система мониторинга леса ForestGuard.
-Получаешь данные от акустических датчиков и дрона.
-Твоя задача: написать чёткий алерт егерю.
+Ты — AI-система акустического мониторинга леса Faun.
+Получаешь данные от акустических датчиков и камеры дрона.
+Твоя задача: написать чёткий, КОНКРЕТНЫЙ алерт егерю.
 
 Правила:
-- Пиши по-русски, коротко и конкретно
-- Укажи координаты, тип угрозы, рекомендацию
-- Без воды и лишних слов
-- 2-3 предложения максимум
+- Пиши по-русски, кратко, по существу
+- Укажи ТИП УГРОЗЫ и конкретные визуальные признаки
+- Если обнаружены люди — укажи и рекомендуй осторожность
+- Если обнаружена техника — укажи тип и масштаб
+- Если обнаружен огонь — приоритет: безопасность инспектора
+- Дай 1-2 КОНКРЕТНЫХ действия (не «проверить место»)
+- Координаты уже указаны в карточке — НЕ дублируй
+- 3-4 предложения максимум
 """
 
 
@@ -42,6 +46,10 @@ async def compose_alert(
     lat: float,
     lon: float,
     confidence: float,
+    has_human: bool = False,
+    has_fire: bool = False,
+    has_felling: bool = False,
+    has_machinery: bool = False,
 ) -> Alert:
 
     priority_map = {
@@ -51,10 +59,25 @@ async def compose_alert(
         "unknown": "СРЕДНИЙ",
     }
     priority = priority_map.get(audio_class, "СРЕДНИЙ")
+
+    visual_details = []
+    if has_human:
+        visual_details.append("обнаружены люди")
+    if has_fire:
+        visual_details.append("открытый огонь")
+    if has_felling:
+        visual_details.append("следы/процесс рубки")
+    if has_machinery:
+        visual_details.append("тяжёлая техника")
+
+    visual_section = visual_description
+    if visual_details:
+        visual_section += "\nВизуальные признаки: " + "; ".join(visual_details)
+
     prompt = f"""
 Данные с датчиков:
 - Звук: {audio_class} (уверенность {confidence:.0%})
-- Визуальный анализ дрона: {visual_description}
+- Визуальный анализ дрона: {visual_section}
 - Координаты: {lat:.4f}°N, {lon:.4f}°E
 - Приоритет: {priority}
 
@@ -75,7 +98,7 @@ async def _call_yandex(user_prompt: str) -> str:
                     "completionOptions": {
                         "stream": False,
                         "temperature": 0.2,
-                        "maxTokens": 200,
+                        "maxTokens": 350,
                     },
                     "messages": [
                         {"role": "system", "text": SYSTEM_PROMPT},

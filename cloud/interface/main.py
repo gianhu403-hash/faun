@@ -408,6 +408,11 @@ class RagQueryRequest(BaseModel):
     has_felling: bool | None = None
     has_human: bool | None = None
     has_fire: bool | None = None
+    has_machinery: bool | None = None
+    people_count: int | None = None
+    equipment_types: list[str] | None = None
+    vegetation_damage: str | None = None
+    damage_area_estimate: str | None = None
 
 
 class RagQueryResponse(BaseModel):
@@ -428,6 +433,11 @@ async def rag_query_endpoint(req: RagQueryRequest):
                 has_felling=req.has_felling or False,
                 has_human=req.has_human or False,
                 has_fire=req.has_fire or False,
+                has_machinery=req.has_machinery or False,
+                people_count=req.people_count or 0,
+                equipment_types=req.equipment_types or [],
+                vegetation_damage=req.vegetation_damage or "",
+                damage_area_estimate=req.damage_area_estimate or "",
             )
             answer = await asyncio.wait_for(query_rag_enriched(ctx), timeout=25)
         else:
@@ -875,6 +885,11 @@ async def live_photo(file: UploadFile):
             "has_felling": result.has_felling,
             "has_machinery": result.has_machinery,
             "is_threat": result.is_threat,
+            "time_of_day": result.time_of_day,
+            "people_count": result.people_count,
+            "equipment_types": result.equipment_types,
+            "vegetation_damage": result.vegetation_damage,
+            "damage_area_estimate": result.damage_area_estimate,
         }
     )
     return {
@@ -969,8 +984,9 @@ async def _run_demo(
         if source_lat is None or source_lon is None:
             source_lat, source_lon = random_point_in_boundary()
 
-        # Find 3 nearest online mics to the source point
-        online_mics = get_nearest_online(source_lat, source_lon, n=3)
+        # Find nearest online mics to the source point
+        N_MICS = int(os.getenv("TDOA_N_MICS", "6"))
+        online_mics = get_nearest_online(source_lat, source_lon, n=N_MICS)
         if len(online_mics) >= 3:
             mic_positions = [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics]
         else:
@@ -992,6 +1008,13 @@ async def _run_demo(
         mic_coords = [(m.lat, m.lon) for m in mic_positions]
         home_lat = mic_positions[0].lat
         home_lon = mic_positions[0].lon
+
+        print(
+            f"TDOA: using {len(mic_positions)} mics (nearest to {source_lat:.4f}, {source_lon:.4f})",
+            flush=True,
+        )
+        for i, m in enumerate(mic_positions):
+            print(f"  mic[{i}]: {m.lat:.4f}, {m.lon:.4f}", flush=True)
 
         await broadcast(
             {
@@ -1016,6 +1039,10 @@ async def _run_demo(
             mic_positions=mic_coords,
         )
         signals, audio_paths = await mic_sim.get_signals()
+        print(
+            f"MicSim: {len(signals)} signals, lengths: {[len(s) for s in signals]}",
+            flush=True,
+        )
 
         # Onset detection — pre-filled quiet baseline so gunshot/engine also trigger
         onset = deps["detect_onset"](signals[0])
@@ -1062,6 +1089,11 @@ async def _run_demo(
         await asyncio.sleep(0.3)
 
         location = deps["triangulate"](signals, mic_positions)
+        print(
+            f"TDOA result: lat={location.lat:.4f}, lon={location.lon:.4f}, "
+            f"error_m={location.error_m:.1f} (source was {source_lat:.4f}, {source_lon:.4f})",
+            flush=True,
+        )
 
         decision = deps["decide"](audio_result, location)
 
@@ -1124,6 +1156,11 @@ async def _run_demo(
                 "has_felling": vision_result.has_felling,
                 "has_machinery": vision_result.has_machinery,
                 "is_threat": vision_result.is_threat,
+                "time_of_day": vision_result.time_of_day,
+                "people_count": vision_result.people_count,
+                "equipment_types": vision_result.equipment_types,
+                "vegetation_damage": vision_result.vegetation_damage,
+                "damage_area_estimate": vision_result.damage_area_estimate,
             }
         )
 
@@ -1133,6 +1170,10 @@ async def _run_demo(
             lat=location.lat,
             lon=location.lon,
             confidence=audio_result.confidence,
+            has_human=vision_result.has_human,
+            has_fire=vision_result.has_fire,
+            has_felling=vision_result.has_felling,
+            has_machinery=vision_result.has_machinery,
         )
         # Store drone photo in incident (sent to ranger after accept)
         await deps["send_confirmed"](alert, photo.data, incident=incident)

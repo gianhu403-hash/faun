@@ -279,6 +279,11 @@ class IncidentContext:
     has_felling: bool = False
     has_human: bool = False
     has_fire: bool = False
+    has_machinery: bool = False
+    people_count: int = 0
+    equipment_types: list[str] = field(default_factory=list)
+    vegetation_damage: str = ""
+    damage_area_estimate: str = ""
 
 
 def _build_enriched_prompt(ctx: IncidentContext) -> str:
@@ -338,11 +343,28 @@ def _build_enriched_prompt(ctx: IncidentContext) -> str:
         if ctx.has_felling:
             details.append("обнаружена рубка")
         if ctx.has_human:
-            details.append("присутствуют люди")
+            if ctx.people_count:
+                details.append(f"присутствуют люди ({ctx.people_count} чел.)")
+            else:
+                details.append("присутствуют люди")
         if ctx.has_fire:
             details.append("обнаружен огонь")
+        if ctx.has_machinery:
+            details.append("обнаружена тяжёлая техника")
+        if ctx.equipment_types:
+            details.append("Техника/оборудование: " + ", ".join(ctx.equipment_types))
         if details:
             parts.append("Визуальные признаки: " + ", ".join(details))
+        if ctx.vegetation_damage and ctx.vegetation_damage != "нет":
+            parts.append(f"Повреждение растительности: {ctx.vegetation_damage}")
+        if ctx.damage_area_estimate and ctx.damage_area_estimate != "нет":
+            parts.append(f"Оценка площади повреждений: {ctx.damage_area_estimate}")
+
+        if ctx.has_machinery and ctx.audio_class in ("chainsaw", "axe", "engine"):
+            parts.append(
+                "ВНИМАНИЕ: обнаружена тяжёлая техника → возможен квалифицированный состав "
+                "(ч. 3 ст. 260 УК РФ — группа лиц, крупный размер)."
+            )
 
     # --- Confidence-adaptive instructions ---
     parts.append("\n## Задание")

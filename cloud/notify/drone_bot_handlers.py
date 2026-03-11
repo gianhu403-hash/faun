@@ -80,6 +80,11 @@ async def drone_photo_handler(
                 "has_fire": result.has_fire,
                 "has_machinery": result.has_machinery,
                 "is_threat": result.is_threat,
+                "time_of_day": result.time_of_day,
+                "people_count": result.people_count,
+                "equipment_types": result.equipment_types,
+                "vegetation_damage": result.vegetation_damage,
+                "damage_area_estimate": result.damage_area_estimate,
             }
         )
         await broadcast({"event": "drone_photo", "drone_b64": photo_b64})
@@ -133,6 +138,10 @@ async def drone_photo_handler(
                         lat=lat,
                         lon=lon,
                         confidence=confidence,
+                        has_human=result.has_human,
+                        has_fire=result.has_fire,
+                        has_felling=result.has_felling,
+                        has_machinery=result.has_machinery,
                     )
                 except Exception:
                     logger.exception("Step 2 failed: compose_alert")

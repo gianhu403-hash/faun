@@ -95,7 +95,13 @@ async def handle_packet(packet: dict) -> None:
                 "has_human": vision.has_human,
                 "has_fire": vision.has_fire,
                 "has_felling": vision.has_felling,
+                "has_machinery": vision.has_machinery,
                 "is_threat": vision.is_threat,
+                "time_of_day": vision.time_of_day,
+                "people_count": vision.people_count,
+                "equipment_types": vision.equipment_types,
+                "vegetation_damage": vision.vegetation_damage,
+                "damage_area_estimate": vision.damage_area_estimate,
             }
         )
     else:
@@ -106,6 +112,7 @@ async def handle_packet(packet: dict) -> None:
             has_human=False,
             has_fire=False,
             has_felling=False,
+            has_machinery=False,
             is_threat=False,
         )
 
@@ -116,6 +123,10 @@ async def handle_packet(packet: dict) -> None:
         lat=packet["lat"],
         lon=packet["lon"],
         confidence=packet["confidence"],
+        has_human=vision.has_human,
+        has_fire=vision.has_fire,
+        has_felling=vision.has_felling,
+        has_machinery=vision.has_machinery,
     )
     print(f"   Alert: {alert.text[:80]}...")
 

@@ -2,7 +2,7 @@ import json
 import logging
 import httpx
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -19,15 +19,26 @@ VISION_URL = os.getenv(
 PROMPT = """Проанализируй снимок с дрона в лесу.
 Ответь только JSON без markdown, формат:
 {
-  "description": "краткое описание что на снимке (1-2 предложения)",
+  "description": "подробное описание (3-5 предложений): что происходит, масштаб, детали",
+  "time_of_day": "утро/день/вечер/ночь (по теням и освещению)",
+  "people_count": 0,
+  "equipment_types": [],
+  "vegetation_damage": "нет/незначительное/умеренное/значительное",
+  "damage_area_estimate": "нет/малая (до 0.1 га)/средняя (0.1-1 га)/большая (более 1 га)",
   "has_human": true/false,
   "has_fire": true/false,
   "has_felling": true/false,
   "has_machinery": true/false,
   "is_threat": true/false
 }
-has_machinery = true если видна тяжёлая техника (трактор, экскаватор, лесовоз, харвестер и т.п.).
-is_threat = true если видны признаки нарушения: незаконная рубка, браконьерство, поджог, подозрительная техника, человек с инструментом (топор, бензопила) в лесу. Туристы, грибники, мероприятия, дороги — это НЕ угроза."""
+Подробности для description:
+- Количество людей, тип и состояние техники, стадия работ
+- Характер повреждений: спиленные стволы, свежие пни, штабели, волок
+- Тип леса: хвойный/лиственный/смешанный
+
+equipment_types — массив: "бензопила", "харвестер", "лесовоз", "экскаватор", "трактор", "пикап" и т.п.
+has_machinery = true если видна тяжёлая техника.
+is_threat = true если видны признаки нарушения. Туристы, грибники — НЕ угроза."""
 
 
 @dataclass
@@ -38,6 +49,11 @@ class VisionResult:
     has_felling: bool
     has_machinery: bool
     is_threat: bool
+    time_of_day: str = ""
+    people_count: int = 0
+    equipment_types: list[str] = field(default_factory=list)
+    vegetation_damage: str = ""
+    damage_area_estimate: str = ""
 
 
 def _parse_result(raw: str) -> VisionResult:
@@ -69,6 +85,11 @@ def _parse_result(raw: str) -> VisionResult:
         has_felling=has_felling,
         has_machinery=has_machinery,
         is_threat=is_threat,
+        time_of_day=data.get("time_of_day", ""),
+        people_count=int(data.get("people_count", 0)),
+        equipment_types=data.get("equipment_types") or [],
+        vegetation_damage=data.get("vegetation_damage", ""),
+        damage_area_estimate=data.get("damage_area_estimate", ""),
     )
 
 
@@ -95,7 +116,7 @@ async def _try_gemma(client: httpx.AsyncClient, photo_b64: str) -> VisionResult:
                 }
             ],
             "temperature": 0.1,
-            "max_tokens": 256,
+            "max_tokens": 512,
         },
     )
     resp.raise_for_status()
@@ -141,6 +162,11 @@ def _stub_result() -> VisionResult:
         has_felling=True,
         has_machinery=False,
         is_threat=True,
+        time_of_day="",
+        people_count=0,
+        equipment_types=[],
+        vegetation_damage="",
+        damage_area_estimate="",
     )
 
 

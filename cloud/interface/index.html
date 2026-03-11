@@ -813,13 +813,28 @@
             var flags = document.createElement('div');
             flags.className = 'vision-flags';
 
-            [['Рубка', d.has_felling], ['Люди', d.has_human], ['Огонь', d.has_fire]].forEach(function(pair) {
+            [['Рубка', d.has_felling], ['Люди', d.has_human], ['Огонь', d.has_fire], ['Техника', d.has_machinery]].forEach(function(pair) {
                 var span = document.createElement('span');
                 span.className = 'vision-flag ' + (pair[1] ? 'yes' : 'no');
                 span.textContent = pair[0] + ': ' + (pair[1] ? 'ДА' : 'НЕТ');
                 flags.appendChild(span);
             });
             frag.appendChild(flags);
+
+            /* Extra vision details */
+            var extras = [];
+            if (d.time_of_day) extras.push('Время дня: ' + d.time_of_day);
+            if (d.people_count) extras.push('Людей: ' + d.people_count);
+            if (d.equipment_types && d.equipment_types.length) extras.push('Техника: ' + d.equipment_types.join(', '));
+            if (d.vegetation_damage && d.vegetation_damage !== 'нет') extras.push('Повреждения: ' + d.vegetation_damage);
+            if (d.damage_area_estimate && d.damage_area_estimate !== 'нет') extras.push('Площадь: ' + d.damage_area_estimate);
+
+            if (extras.length) {
+                var extra = document.createElement('div');
+                extra.style.cssText = 'font-size:13px;color:#888;margin-top:4px;';
+                extra.textContent = extras.join(' · ');
+                frag.appendChild(extra);
+            }
 
             return frag;
         }
@@ -1075,6 +1090,11 @@
                 payload.has_felling = !!incident.vision.has_felling;
                 payload.has_human = !!incident.vision.has_human;
                 payload.has_fire = !!incident.vision.has_fire;
+                payload.has_machinery = !!incident.vision.has_machinery;
+                payload.people_count = incident.vision.people_count || 0;
+                payload.equipment_types = incident.vision.equipment_types || [];
+                payload.vegetation_damage = incident.vision.vegetation_damage || '';
+                payload.damage_area_estimate = incident.vision.damage_area_estimate || '';
             }
 
             fetch('/api/v1/rag-query', {
