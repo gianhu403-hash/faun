@@ -30,3 +30,11 @@ def test_sidebar_width(html):
     """Sidebar must be at least 460px wide for readability."""
     width = _css_px(html, r"grid-template-columns:\s*1fr\s+(\d+)px")
     assert width >= 460, f"Sidebar width {width}px is too narrow (min 460px)"
+
+
+def test_events_log_size(html):
+    """Events log must be wide and tall enough to read comfortably."""
+    width = _css_px(html, r"\.events-log\s*\{[^}]*width:\s*(\d+)px")
+    max_h = _css_px(html, r"\.events-log\s*\{[^}]*max-height:\s*(\d+)px")
+    assert width >= 520, f"Events-log width {width}px too narrow (min 520px)"
+    assert max_h >= 260, f"Events-log max-height {max_h}px too short (min 260px)"
