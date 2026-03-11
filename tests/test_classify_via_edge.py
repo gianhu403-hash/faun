@@ -58,3 +58,18 @@ class TestClassifyViaEdgeRetry:
 
         assert result.label == "chainsaw"
         assert result.confidence == 0.87
+
+    def test_classify_via_edge_double_failure_returns_unknown(
+        self, wav_file: str
+    ) -> None:
+        """Two consecutive ConnectErrors return unknown without crashing."""
+        with patch(
+            "httpx.post",
+            side_effect=[httpx.ConnectError("refused"), httpx.ConnectError("refused")],
+        ):
+            from cloud.interface.main import _classify_via_edge
+
+            result = _classify_via_edge(wav_file)
+
+        assert result.label == "unknown"
+        assert result.confidence == 0.0
