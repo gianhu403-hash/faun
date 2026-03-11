@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 SEARCH_INDEX_ID = os.getenv("SEARCH_INDEX_ID")
+SDK_TIMEOUT = int(os.getenv("RAG_SDK_TIMEOUT", "15"))
 
 API_URL = os.getenv(
     "YANDEX_GPT_URL",
@@ -125,7 +126,15 @@ def _call_yandex_with_sdk_sync(prompt: str) -> str:
 async def _call_yandex_with_sdk(prompt: str) -> str:
     """Call YandexGPT via SDK with File Search + Web Search (Assistants API)."""
     try:
-        return await asyncio.to_thread(_call_yandex_with_sdk_sync, prompt)
+        return await asyncio.wait_for(
+            asyncio.to_thread(_call_yandex_with_sdk_sync, prompt),
+            timeout=SDK_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "SDK RAG timed out after %ds, falling back to plain API", SDK_TIMEOUT
+        )
+        return await _call_yandex_plain(prompt)
     except ImportError:
         logger.warning("yandex_ai_studio_sdk not installed, falling back to plain API")
         return await _call_yandex_plain(prompt)
