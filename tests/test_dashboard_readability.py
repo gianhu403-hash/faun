@@ -54,3 +54,11 @@ def test_sidebar_fonts(html):
     assert detect >= 20, f"detect-class font {detect}px too small (min 20px)"
     assert label >= 12, f"sb-label font {label}px too small (min 12px)"
     assert gpt >= 15, f"gpt-text font {gpt}px too small (min 15px)"
+
+
+def test_header_size(html):
+    """Header must be tall enough and logo readable."""
+    height = _css_px(html, r"\.header\s*\{[^}]*height:\s*(\d+)px")
+    logo = _css_px(html, r"\.logo\s*\{[^}]*font-size:\s*(\d+)px")
+    assert height >= 48, f"Header height {height}px too short (min 48px)"
+    assert logo >= 18, f"Logo font {logo}px too small (min 18px)"
