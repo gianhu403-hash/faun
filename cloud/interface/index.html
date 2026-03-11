@@ -155,32 +155,32 @@
         }
         .sb-section {
             border-bottom: 1px solid #1a1e2a;
-            padding: 12px 14px;
+            padding: 18px 20px;
         }
         .sb-section:last-child { border-bottom: none; }
         .sb-label {
-            font-size: 10px;
-            letter-spacing: 2px;
+            font-size: 13px;
+            letter-spacing: 3px;
             text-transform: uppercase;
             color: #555;
-            margin-bottom: 6px;
+            margin-bottom: 10px;
         }
         .sb-empty {
-            padding: 40px 14px;
+            padding: 60px 20px;
             text-align: center;
             color: #333;
-            font-size: 12px;
+            font-size: 16px;
         }
 
         /* Detection section */
         .detect-class {
-            font-size: 16px;
+            font-size: 22px;
             font-weight: 700;
             color: #e0e0e8;
         }
         .detect-conf {
-            margin-top: 4px;
-            font-size: 12px;
+            margin-top: 6px;
+            font-size: 16px;
         }
         .conf-bar {
             font-family: inherit;
@@ -191,9 +191,9 @@
         .conf-bar.warn { color: #ffaa00; }
         .detect-level {
             display: inline-block;
-            margin-top: 4px;
-            padding: 2px 8px;
-            font-size: 10px;
+            margin-top: 6px;
+            padding: 4px 12px;
+            font-size: 13px;
             letter-spacing: 1px;
             text-transform: uppercase;
             border: 1px solid;
@@ -205,19 +205,19 @@
 
         /* Triangulation section */
         .tri-coords {
-            font-size: 14px;
+            font-size: 18px;
             font-weight: 600;
             color: #e0e0e8;
         }
         .tri-error {
-            font-size: 12px;
-            margin-top: 2px;
+            font-size: 16px;
+            margin-top: 4px;
         }
 
         /* Drone photo */
         .drone-photo {
             width: 100%;
-            max-height: 200px;
+            max-height: 300px;
             object-fit: cover;
             border: 1px solid #1a1e2a;
             border-radius: 1px;
@@ -225,18 +225,18 @@
 
         /* Vision */
         .vision-desc {
-            font-size: 12px;
+            font-size: 16px;
             color: #c8c8d0;
             line-height: 1.5;
-            margin-bottom: 6px;
+            margin-bottom: 10px;
         }
         .vision-flags {
             display: flex;
-            gap: 8px;
-            font-size: 11px;
+            gap: 10px;
+            font-size: 14px;
         }
         .vision-flag {
-            padding: 2px 6px;
+            padding: 4px 10px;
             border: 1px solid #1a1e2a;
             border-radius: 1px;
         }
@@ -245,7 +245,7 @@
 
         /* Alert / GPT text */
         .gpt-text {
-            font-size: 12px;
+            font-size: 16px;
             color: #c8c8d0;
             line-height: 1.6;
             white-space: pre-wrap;
@@ -255,13 +255,13 @@
         .rag-btn {
             display: block;
             width: 100%;
-            padding: 8px;
-            margin-top: 8px;
+            padding: 12px;
+            margin-top: 12px;
             border: 1px solid #1a1e2a;
             background: #111318;
             color: #888;
             font-family: inherit;
-            font-size: 11px;
+            font-size: 14px;
             letter-spacing: 1px;
             text-transform: uppercase;
             cursor: pointer;
@@ -277,11 +277,11 @@
             cursor: wait;
         }
         .rag-response {
-            margin-top: 8px;
-            padding: 8px;
+            margin-top: 12px;
+            padding: 12px;
             background: #111318;
             border: 1px solid #1a1e2a;
-            font-size: 11px;
+            font-size: 14px;
             line-height: 1.6;
             color: #c8c8d0;
             max-height: 400px;
@@ -289,9 +289,9 @@
         }
         .rag-response .rag-heading {
             color: #00ff41;
-            font-size: 12px;
+            font-size: 16px;
             font-weight: 700;
-            margin: 10px 0 4px 0;
+            margin: 14px 0 6px 0;
             letter-spacing: 1px;
         }
         .rag-response .rag-heading:first-child { margin-top: 0; }
@@ -300,7 +300,7 @@
             font-weight: 700;
         }
         .rag-response .rag-item {
-            padding-left: 12px;
+            padding-left: 16px;
             position: relative;
         }
         .rag-response .rag-item::before {
@@ -310,13 +310,13 @@
             color: #555;
         }
         .rag-response .rag-num {
-            padding-left: 4px;
+            padding-left: 6px;
         }
 
         /* Protocol link */
         .proto-link {
             color: #555;
-            font-size: 11px;
+            font-size: 14px;
             text-decoration: none;
             transition: color 0.15s;
         }
@@ -324,10 +324,10 @@
 
         .status-dot {
             display: inline-block;
-            width: 8px;
-            height: 8px;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
-            margin-right: 4px;
+            margin-right: 6px;
         }
         .status-dot.resolved { background: #00ff41; }
         .status-dot.false_alarm { background: #555; }
@@ -344,7 +344,7 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 12px;
+            gap: 16px;
         }
         .cam-overlay.active { display: flex; }
         .cam-overlay video {
@@ -356,15 +356,15 @@
         .cam-overlay canvas { display: none; }
         .cam-btns {
             display: flex;
-            gap: 8px;
+            gap: 12px;
         }
         .cam-btns button {
-            padding: 8px 20px;
+            padding: 12px 28px;
             border: 1px solid #1a1e2a;
             background: #111318;
             color: #888;
             font-family: inherit;
-            font-size: 12px;
+            font-size: 16px;
             letter-spacing: 1px;
             text-transform: uppercase;
             cursor: pointer;
@@ -374,7 +374,7 @@
         .cam-btns button:hover { border-color: #ff2020; color: #ff2020; }
         .cam-btns button.primary { border-color: #ff2020; color: #ff2020; }
         .cam-result {
-            font-size: 12px;
+            font-size: 16px;
             color: #00ff41;
             max-width: 80%;
             text-align: center;
@@ -382,7 +382,7 @@
         }
 
         /* Scrollbar */
-        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #1a1e2a; }
 

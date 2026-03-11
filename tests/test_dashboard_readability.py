@@ -44,3 +44,13 @@ def test_events_log_font(html):
     """Events log text must be at least 14px for readability."""
     font = _css_px(html, r"\.ev-line\s*\{[^}]*font-size:\s*(\d+)px")
     assert font >= 14, f"Events-log font {font}px too small (min 14px)"
+
+
+def test_sidebar_fonts(html):
+    """Key sidebar fonts must meet minimum readability thresholds."""
+    detect = _css_px(html, r"\.detect-class\s*\{[^}]*font-size:\s*(\d+)px")
+    label = _css_px(html, r"\.sb-label\s*\{[^}]*font-size:\s*(\d+)px")
+    gpt = _css_px(html, r"\.gpt-text\s*\{[^}]*font-size:\s*(\d+)px")
+    assert detect >= 20, f"detect-class font {detect}px too small (min 20px)"
+    assert label >= 12, f"sb-label font {label}px too small (min 12px)"
+    assert gpt >= 15, f"gpt-text font {gpt}px too small (min 15px)"
