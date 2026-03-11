@@ -2,13 +2,13 @@
 
 ## Swagger UI
 
-<swagger-ui src="http://81.85.73.178:8000/openapi.json"/>
+<swagger-ui src="https://faun-forrest.duckdns.org/openapi.json"/>
 
 ---
 
 ## Эндпоинты
 
-Все эндпоинты доступны по адресу `http://81.85.73.178:8000`. Auto-generated Swagger UI: `/docs`.
+Все эндпоинты доступны по адресу `https://faun-forrest.duckdns.org`. Auto-generated Swagger UI: `/docs`.
 
 ### Core
 
@@ -153,24 +153,8 @@ Response:
 | Метод | Путь | Описание |
 |-------|------|----------|
 | `GET` | `/api/v1/datalens/incidents` | JSON инцидентов для DataLens |
-| `GET` | `/api/v1/datalens/stats` | Агрегированная статистика |
 | `GET` | `/api/v1/incidents/export` | Экспорт CSV для DataLens |
 | `GET` | `/api/v1/ai-studio-stack` | Список интеграций AI Studio |
-
-#### GET /api/v1/datalens/stats
-
-```json
-{
-  "total_incidents": 200,
-  "by_class": {"chainsaw": 45, "gunshot": 30, ...},
-  "by_status": {"resolved": 120, "pending": 40, ...},
-  "by_district": {"Мдальское": 25, ...},
-  "avg_response_time_min": 12.5,
-  "daily_average": 6.7,
-  "detection_rate": 60.0,
-  "false_alarm_rate": 15.0
-}
-```
 
 ### FGIS-LK (stub)
 
@@ -186,6 +170,14 @@ Response:
 |-------|------|----------|
 | `GET` | `/api/v1/workflow/definition` | 12-шаговый pipeline (JSON) |
 | `POST` | `/api/v1/workflow/run` | Запуск pipeline через Yandex Workflows |
+
+### Drone Dispatch
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| `POST` | `/api/v1/incidents/{incident_id}/dispatch-drone` | Отправить дрон к инциденту для фото-верификации |
+
+Вызывается кнопкой «Отправить дрон» в Telegram (callback `dispatch_drone:{incident_id}`). Дрон летит к координатам инцидента, делает фото и отправляет результат через Vision pipeline.
 
 ### Live (браузер)
 
@@ -204,7 +196,7 @@ Response:
 
 ## WebSocket Events
 
-Подключение: `ws://81.85.73.178:8000/ws`
+Подключение: `wss://faun-forrest.duckdns.org/ws` (prod) / `ws://localhost:8000/ws` (dev)
 
 | Event | Поля | Описание |
 |-------|------|----------|

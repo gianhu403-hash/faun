@@ -252,7 +252,7 @@ CREATE TABLE microphones (
 
 ### Diamond Grid
 
-Микрофоны размещаются на ромбовидной (diamond) сетке с шагом `MIC_GRID_SPACING_M` (по умолчанию 1000 м). Нечётные ряды смещены на пол-шага, вертикальный шаг = `spacing × √3/2`. Это обеспечивает максимально плотное покрытие для круговых зон детекции.
+Микрофоны размещаются на ромбовидной (diamond) сетке с шагом `MIC_GRID_SPACING_M` (по умолчанию 1500 м). Нечётные ряды смещены на пол-шага, вертикальный шаг = `spacing × √3/2`. Это обеспечивает максимально плотное покрытие для круговых зон детекции.
 
 ### Зоны
 
@@ -305,7 +305,7 @@ add_permit(zone_lat_min, ..., valid_from, valid_until) -> Permit
 has_valid_permit(lat, lon, on_date=None) -> bool
 
 # Microphones
-seed_microphones(spacing_m=1000) -> list[Microphone]
+seed_microphones(spacing_m=1500) -> list[Microphone]
 get_all() -> list[Microphone]
 get_online() -> list[Microphone]
 ```

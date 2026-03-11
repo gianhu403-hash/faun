@@ -62,22 +62,35 @@ graph LR
 
 ---
 
+## Production-ссылки
+
+| Ресурс | URL |
+|--------|-----|
+| Дашборд | [https://faun-forrest.duckdns.org/](https://faun-forrest.duckdns.org/) |
+| Документация | [https://faun-forrest.duckdns.org:8080/](https://faun-forrest.duckdns.org:8080/) |
+| Ranger Bot | [@ya_faun_bot](https://t.me/ya_faun_bot) |
+| Drone Bot | Токен в `.env` (`TELEGRAM_DRONE_BOT_TOKEN`) |
+
+---
+
 ## Быстрый старт
 
 ```bash
 # Клонировать репозиторий
-git clone https://github.com/glebsem2005/ya_hve.git
-cd ya_hve
+git clone https://github.com/gianhu403-hash/faun.git
+cd faun
 
 # Настроить переменные окружения
 cp .env.example .env
-# Заполнить TELEGRAM_BOT_TOKEN, YANDEX_API_KEY, YANDEX_FOLDER_ID
+# Заполнить: TELEGRAM_BOT_TOKEN, TELEGRAM_DRONE_BOT_TOKEN,
+#            YANDEX_API_KEY, YANDEX_FOLDER_ID, SEARCH_INDEX_ID
 
 # Запустить
 docker compose up -d
 ```
 
-Дашборд доступен на [http://localhost:8000](http://localhost:8000), Telegram-бот: [@ya_faun_bot](https://t.me/ya_faun_bot).
+Дашборд: [http://localhost:8000](http://localhost:8000) (dev) / [https://faun-forrest.duckdns.org/](https://faun-forrest.duckdns.org/) (prod).
+Telegram-бот: [@ya_faun_bot](https://t.me/ya_faun_bot).
 
 ---
 

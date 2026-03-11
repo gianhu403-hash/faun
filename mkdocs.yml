@@ -1,6 +1,6 @@
 site_name: "Faun — Акустический мониторинг леса"
 site_description: "Техническая документация системы Faun: AI-мониторинг лесных нарушений"
-site_url: "http://81.85.73.178:8080"
+site_url: "https://faun-forrest.duckdns.org:8080"
 
 theme:
   name: material
@@ -31,8 +31,8 @@ theme:
   icon:
     repo: fontawesome/brands/github
 
-repo_name: "glebsem2005/ya_hve"
-repo_url: "https://github.com/glebsem2005/ya_hve"
+repo_name: "gianhu403-hash/faun"
+repo_url: "https://github.com/gianhu403-hash/faun"
 
 nav:
   - Главная: index.md

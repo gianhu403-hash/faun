@@ -177,7 +177,7 @@ docker compose restart cloud
 ```nginx
 server {
     listen 8080;
-    server_name 81.85.73.178;
+    server_name faun-forrest.duckdns.org;
     root /var/www/ya_hve/site;
     index index.html;
 

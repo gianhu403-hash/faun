@@ -243,6 +243,7 @@ AUDIT chat_id=<id> action=<action> incident=<id> result=<result>
 | `verdict:false:{id}` | `verdict_callback` | Ложный вызов |
 | `confirm_reg:yes/no` | `confirm_reg_callback` | Подтверждение регистрации |
 | `snooze:{incident_id}` | `snooze_callback` | Отложить алерт на 15 мин |
+| `dispatch_drone:{incident_id}` | `dispatch_drone_callback` | Отправить дрон для верификации |
 | `rag:action:{class}:{lat}:{lon}` | `rag_callback` | RAG: рекомендации |
 | `rag:protocol:{class}:{lat}:{lon}` | `rag_callback` | RAG: шаблон протокола |
 

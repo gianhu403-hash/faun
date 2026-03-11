@@ -7,7 +7,7 @@ Pipeline обработки аудио: onset detection → YAMNet v7 classifica
 ```mermaid
 flowchart LR
     A[🎤 Аудио<br>16kHz mono] --> B[Onset Detection<br>Energy-ratio]
-    B --> |triggered| C[YAMNet v7<br>6 классов]
+    B --> |triggered| C[YAMNet v7/v8<br>6 классов]
     B --> |not triggered| X[❌ Игнор]
     C --> D[TDOA v5<br>Триангуляция]
     D --> E[NDSI<br>Soundscape Index]
