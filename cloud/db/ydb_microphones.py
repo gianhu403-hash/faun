@@ -208,21 +208,23 @@ class YDBMicrophoneRepository(MicrophoneRepository):
         return mics
 
     def get_online(self, limit: int = 2000) -> list[Microphone]:
-        from cloud.db.ydb_client import get_pool
+        from cloud.db.ydb_client import get_driver
 
-        pool = get_pool()
+        driver = get_driver()
 
-        def _q(session):
-            from cloud.db.ydb_client import execute_query
-
-            result = execute_query(
-                session,
-                f"DECLARE $lim AS Uint64; SELECT * FROM microphones WHERE status = 'online' LIMIT $lim",
-                {"$lim": limit},
-            )
-            return [self._row_to_mic(row) for row in result[0].rows]
-
-        return pool.retry_operation_sync(_q)
+        # Use scan query to avoid TruncatedResponseError on large result sets
+        mics: list[Microphone] = []
+        it = driver.table_client.scan_query(
+            f"SELECT * FROM microphones WHERE status = 'online' LIMIT {limit}"
+        )
+        while True:
+            try:
+                result = next(it)
+                for row in result.result_set.rows:
+                    mics.append(self._row_to_mic(row))
+            except StopIteration:
+                break
+        return mics
 
     def get_by_uid(self, mic_uid: str) -> Microphone | None:
         from cloud.db.ydb_client import get_pool
