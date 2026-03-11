@@ -67,6 +67,7 @@ def _load_yamnet_class_names():
         return _yamnet_class_names
     try:
         import csv, io, urllib.request
+
         url = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
         resp = urllib.request.urlopen(url)
         reader = csv.reader(io.StringIO(resp.read().decode()))
@@ -81,9 +82,11 @@ def _load_models():
     global _yamnet, _head
     if _yamnet is None:
         import tensorflow_hub as hub
+
         _yamnet = hub.load("https://tfhub.dev/google/yamnet/1")
     if _head is None:
         import tensorflow as tf
+
         try:
             _head = tf.keras.models.load_model(MODEL_PATH)
         except Exception as e:
@@ -115,7 +118,11 @@ def _classify_base_yamnet(scores_np: np.ndarray) -> AudioResult:
     best_score = agg[best_class]
 
     if best_score < YAMNET_THRESHOLD or best_class == "background":
-        return AudioResult(label="background", confidence=1.0 - sum(v for k, v in agg.items() if k != "background"), raw_scores=agg)
+        return AudioResult(
+            label="background",
+            confidence=1.0 - sum(v for k, v in agg.items() if k != "background"),
+            raw_scores=agg,
+        )
 
     return AudioResult(label=best_class, confidence=best_score, raw_scores=agg)
 
@@ -131,6 +138,10 @@ def classify(audio_path: str) -> AudioResult:
         return _unknown()
     if len(waveform) < 15600:
         waveform = np.pad(waveform, (0, 15600 - len(waveform)))
+
+    peak = np.max(np.abs(waveform))
+    if peak > 1e-6:
+        waveform = waveform / peak
 
     scores, embeddings, spectrogram = yamnet(waveform)
     scores_np = scores.numpy()

@@ -252,3 +252,40 @@ class TestClassifyEdgeCases:
 
         assert result.label in CLASSES
         assert isinstance(result, AudioResult)
+
+
+# ---------------------------------------------------------------------------
+# classify() — normalization
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyNormalization:
+    def test_classify_normalizes_quiet_waveform(self) -> None:
+        """Quiet waveform (peak=0.1) should be peak-normalized before YAMNet."""
+        quiet = np.sin(np.linspace(0, 2 * np.pi * 440, 16000)).astype(np.float32) * 0.1
+        assert np.max(np.abs(quiet)) <= 0.1  # sanity: it's quiet
+
+        yamnet = _make_yamnet_mock()
+        head = _make_head_mock()
+        captured_waveforms: list[np.ndarray] = []
+
+        def capturing_yamnet(wf):
+            captured_waveforms.append(np.array(wf, copy=True))
+            return yamnet(wf)
+
+        with (
+            patch("edge.audio.classifier.sf") as mock_sf,
+            patch(
+                "edge.audio.classifier._load_models",
+                return_value=(capturing_yamnet, head),
+            ),
+        ):
+            mock_sf.read.return_value = (quiet, 16000)
+            from edge.audio.classifier import classify
+
+            classify("fake_audio.wav")
+
+        assert len(captured_waveforms) > 0
+        passed_waveform = captured_waveforms[0]
+        # After normalization, peak should be ≈ 1.0
+        assert np.max(np.abs(passed_waveform)) == pytest.approx(1.0, abs=0.01)
