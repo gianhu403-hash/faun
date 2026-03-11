@@ -849,6 +849,7 @@ async def live_photo(file: UploadFile):
             "has_human": result.has_human,
             "has_fire": result.has_fire,
             "has_felling": result.has_felling,
+            "has_machinery": result.has_machinery,
             "is_threat": result.is_threat,
         }
     )
@@ -908,189 +909,197 @@ async def _run_demo(
         deps = _import_demo_deps()
     except Exception:
         logger.exception("Demo: failed to import dependencies (TF/classifier)")
+        await broadcast({"event": "pipeline_end", "reason": "import_error"})
         return
 
-    MicPosition = deps["MicPosition"]
-    import os
-    from cloud.db.microphones import random_point_in_boundary, get_nearest_online
+    try:
+        MicPosition = deps["MicPosition"]
+        import os
+        from cloud.db.microphones import random_point_in_boundary, get_nearest_online
 
-    # Generate random source in polygon if not specified
-    if source_lat is None or source_lon is None:
-        source_lat, source_lon = random_point_in_boundary()
+        # Generate random source in polygon if not specified
+        if source_lat is None or source_lon is None:
+            source_lat, source_lon = random_point_in_boundary()
 
-    # Find 3 nearest online mics to the source point
-    online_mics = get_nearest_online(source_lat, source_lon, n=3)
-    if len(online_mics) >= 3:
-        mic_positions = [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics]
-    else:
-        mic_positions = [
-            MicPosition(
-                lat=float(os.getenv("MIC_A_LAT", 57.3697)),
-                lon=float(os.getenv("MIC_A_LON", 44.6200)),
-            ),
-            MicPosition(
-                lat=float(os.getenv("MIC_B_LAT", 57.3752)),
-                lon=float(os.getenv("MIC_B_LON", 44.6345)),
-            ),
-            MicPosition(
-                lat=float(os.getenv("MIC_C_LAT", 57.3631)),
-                lon=float(os.getenv("MIC_C_LON", 44.6489)),
-            ),
-        ]
+        # Find 3 nearest online mics to the source point
+        online_mics = get_nearest_online(source_lat, source_lon, n=3)
+        if len(online_mics) >= 3:
+            mic_positions = [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics]
+        else:
+            mic_positions = [
+                MicPosition(
+                    lat=float(os.getenv("MIC_A_LAT", 57.3697)),
+                    lon=float(os.getenv("MIC_A_LON", 44.6200)),
+                ),
+                MicPosition(
+                    lat=float(os.getenv("MIC_B_LAT", 57.3752)),
+                    lon=float(os.getenv("MIC_B_LON", 44.6345)),
+                ),
+                MicPosition(
+                    lat=float(os.getenv("MIC_C_LAT", 57.3631)),
+                    lon=float(os.getenv("MIC_C_LON", 44.6489)),
+                ),
+            ]
 
-    mic_coords = [(m.lat, m.lon) for m in mic_positions]
-    home_lat = mic_positions[0].lat
-    home_lon = mic_positions[0].lon
+        mic_coords = [(m.lat, m.lon) for m in mic_positions]
+        home_lat = mic_positions[0].lat
+        home_lon = mic_positions[0].lon
 
-    await broadcast(
-        {
-            "event": "mic_active",
-            "mics": [{"lat": m.lat, "lon": m.lon} for m in mic_positions],
-        }
-    )
-    await broadcast(
-        {
-            "event": "source_point",
-            "lat": source_lat,
-            "lon": source_lon,
-            "scenario": scenario,
-        }
-    )
-    await asyncio.sleep(0.5)
-
-    mic_sim = deps["MicSimulator"](
-        scenario,
-        source_lat=source_lat,
-        source_lon=source_lon,
-        mic_positions=mic_coords,
-    )
-    signals, audio_paths = await mic_sim.get_signals()
-
-    # Onset detection — pre-filled quiet baseline so gunshot/engine also trigger
-    onset = deps["detect_onset"](signals[0])
-    await broadcast(
-        {
-            "event": "onset_check",
-            "triggered": onset.triggered,
-            "energy_ratio": round(onset.energy_ratio, 2),
-        }
-    )
-
-    if not onset.triggered:
         await broadcast(
             {
-                "event": "pipeline_end",
-                "reason": f"no_onset (ratio={onset.energy_ratio:.1f})",
+                "event": "mic_active",
+                "mics": [{"lat": m.lat, "lon": m.lon} for m in mic_positions],
             }
         )
-        return
+        await broadcast(
+            {
+                "event": "source_point",
+                "lat": source_lat,
+                "lon": source_lon,
+                "scenario": scenario,
+            }
+        )
+        await asyncio.sleep(0.5)
 
-    audio_result = deps["classify"](audio_paths[0])
+        mic_sim = deps["MicSimulator"](
+            scenario,
+            source_lat=source_lat,
+            source_lon=source_lon,
+            mic_positions=mic_coords,
+        )
+        signals, audio_paths = await mic_sim.get_signals()
 
-    # Demo override: synthetic demo files are too quiet for v7 head model.
-    # Force expected class so the demo pipeline always completes.
-    if audio_result.label in ("background", "unknown") and scenario in (
-        "chainsaw",
-        "gunshot",
-        "engine",
-        "axe",
-    ):
-        from edge.audio.classifier import AudioResult
-
-        audio_result = AudioResult(
-            label=scenario,
-            confidence=0.85,
-            raw_scores={scenario: 0.85, "background": 0.15},
+        # Onset detection — pre-filled quiet baseline so gunshot/engine also trigger
+        onset = deps["detect_onset"](signals[0])
+        await broadcast(
+            {
+                "event": "onset_check",
+                "triggered": onset.triggered,
+                "energy_ratio": round(onset.energy_ratio, 2),
+            }
         )
 
-    await broadcast(
-        {
-            "event": "audio_classified",
-            "class": audio_result.label,
-            "confidence": audio_result.confidence,
-        }
-    )
-    await asyncio.sleep(0.3)
+        if not onset.triggered:
+            await broadcast(
+                {
+                    "event": "pipeline_end",
+                    "reason": f"no_onset (ratio={onset.energy_ratio:.1f})",
+                }
+            )
+            return
 
-    location = deps["triangulate"](signals, mic_positions)
+        audio_result = deps["classify"](audio_paths[0])
 
-    decision = deps["decide"](audio_result, location)
+        # Demo override: synthetic demo files are too quiet for v7 head model.
+        # Force expected class so the demo pipeline always completes.
+        if audio_result.label in ("background", "unknown") and scenario in (
+            "chainsaw",
+            "gunshot",
+            "engine",
+            "axe",
+        ):
+            from edge.audio.classifier import AudioResult
 
-    await broadcast(
-        {
-            "event": "location_found",
-            "lat": location.lat,
-            "lon": location.lon,
-            "error_m": location.error_m,
-        }
-    )
+            audio_result = AudioResult(
+                label=scenario,
+                confidence=0.85,
+                raw_scores={scenario: 0.85, "background": 0.15},
+            )
 
-    await broadcast(
-        {
-            "event": "agent_decision",
-            "send_drone": decision.send_drone,
-            "priority": decision.priority,
-            "reason": decision.reason,
-        }
-    )
+        await broadcast(
+            {
+                "event": "audio_classified",
+                "class": audio_result.label,
+                "confidence": audio_result.confidence,
+            }
+        )
+        await asyncio.sleep(0.3)
 
-    if not decision.send_drone:
-        await broadcast({"event": "pipeline_end", "reason": "no_anomaly"})
-        return
+        location = deps["triangulate"](signals, mic_positions)
 
-    drone = deps["SimulatedDrone"](
-        home_lat=home_lat, home_lon=home_lon, scenario=scenario
-    )
-    await drone.takeoff()
+        decision = deps["decide"](audio_result, location)
 
-    async def drone_task():
-        async for pos in drone.fly_to(location.lat, location.lon):
-            await broadcast({"event": "drone_moving", "lat": pos.lat, "lon": pos.lon})
-        photo = await drone.capture_photo()
-        await broadcast({"event": "drone_photo", "drone_b64": photo.b64})
-        return photo
+        await broadcast(
+            {
+                "event": "location_found",
+                "lat": location.lat,
+                "lon": location.lon,
+                "error_m": location.error_m,
+            }
+        )
 
-    # send_pending creates an Incident and returns it
-    photo, incident = await asyncio.gather(
-        drone_task(),
-        deps["send_pending"](
-            location.lat,
-            location.lon,
-            audio_result.label,
-            decision.reason,
+        await broadcast(
+            {
+                "event": "agent_decision",
+                "send_drone": decision.send_drone,
+                "priority": decision.priority,
+                "reason": decision.reason,
+            }
+        )
+
+        if not decision.send_drone:
+            await broadcast({"event": "pipeline_end", "reason": "no_anomaly"})
+            return
+
+        drone = deps["SimulatedDrone"](
+            home_lat=home_lat, home_lon=home_lon, scenario=scenario
+        )
+        await drone.takeoff()
+
+        async def drone_task():
+            async for pos in drone.fly_to(location.lat, location.lon):
+                await broadcast(
+                    {"event": "drone_moving", "lat": pos.lat, "lon": pos.lon}
+                )
+            photo = await drone.capture_photo()
+            await broadcast({"event": "drone_photo", "drone_b64": photo.b64})
+            return photo
+
+        # send_pending creates an Incident and returns it
+        photo, incident = await asyncio.gather(
+            drone_task(),
+            deps["send_pending"](
+                location.lat,
+                location.lon,
+                audio_result.label,
+                decision.reason,
+                confidence=audio_result.confidence,
+                is_demo=True,
+            ),
+        )
+
+        vision_result = await deps["classify_photo"](photo.b64)
+        await broadcast(
+            {
+                "event": "vision_classified",
+                "description": vision_result.description,
+                "has_human": vision_result.has_human,
+                "has_fire": vision_result.has_fire,
+                "has_felling": vision_result.has_felling,
+                "has_machinery": vision_result.has_machinery,
+                "is_threat": vision_result.is_threat,
+            }
+        )
+
+        alert = await deps["compose_alert"](
+            audio_class=audio_result.label,
+            visual_description=vision_result.description,
+            lat=location.lat,
+            lon=location.lon,
             confidence=audio_result.confidence,
-            is_demo=True,
-        ),
-    )
-
-    vision_result = await deps["classify_photo"](photo.b64)
-    await broadcast(
-        {
-            "event": "vision_classified",
-            "description": vision_result.description,
-            "has_human": vision_result.has_human,
-            "has_fire": vision_result.has_fire,
-            "has_felling": vision_result.has_felling,
-            "is_threat": vision_result.is_threat,
-        }
-    )
-
-    alert = await deps["compose_alert"](
-        audio_class=audio_result.label,
-        visual_description=vision_result.description,
-        lat=location.lat,
-        lon=location.lon,
-        confidence=audio_result.confidence,
-    )
-    # Store drone photo in incident (sent to ranger after accept)
-    await deps["send_confirmed"](alert, photo.data, incident=incident)
-    await broadcast(
-        {
-            "event": "alert_sent",
-            "text": alert.text,
-            "priority": alert.priority,
-            "incident_id": incident.id,
-        }
-    )
-    await drone.return_home()
-    await broadcast({"event": "pipeline_end", "reason": "complete"})
+        )
+        # Store drone photo in incident (sent to ranger after accept)
+        await deps["send_confirmed"](alert, photo.data, incident=incident)
+        await broadcast(
+            {
+                "event": "alert_sent",
+                "text": alert.text,
+                "priority": alert.priority,
+                "incident_id": incident.id,
+            }
+        )
+        await drone.return_home()
+        await broadcast({"event": "pipeline_end", "reason": "complete"})
+    except Exception:
+        logger.exception("Demo pipeline error")
+        await broadcast({"event": "pipeline_end", "reason": "error"})
