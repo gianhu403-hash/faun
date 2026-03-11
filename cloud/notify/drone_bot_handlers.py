@@ -14,8 +14,10 @@ Message handlers:
 import base64
 import logging
 import random
+import re
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import (
     CommandHandler,
     MessageHandler,
@@ -24,6 +26,14 @@ from telegram.ext import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MD_ESCAPE_RE = re.compile(r"([_*\[\]`~>#+\-=|{}.!\\])")
+
+
+def escape_markdown(text: str) -> str:
+    """Escape Telegram Markdown special characters in text."""
+    return _MD_ESCAPE_RE.sub(r"\\\1", text)
+
 
 try:
     from cloud.interface.main import broadcast
@@ -144,19 +154,33 @@ async def drone_photo_handler(
             except Exception:
                 logger.exception("Broadcast failed after threat pipeline")
 
-            await update.message.reply_text(
+            desc_escaped = escape_markdown(result.description)
+            reply = (
                 f"*Обнаружена угроза*\n\n"
                 f"Класс: {audio_class}\n"
                 f"Координаты: {lat:.4f}°N, {lon:.4f}°E\n"
-                f"Визуальный анализ: {result.description}\n"
-                f"{'Инцидент создан, алерт отправлен.' if incident else 'Не удалось создать инцидент.'}",
-                parse_mode="Markdown",
+                f"Визуальный анализ: {desc_escaped}\n"
+                f"{'Инцидент создан, алерт отправлен.' if incident else 'Не удалось создать инцидент.'}"
             )
+            try:
+                await update.message.reply_text(reply, parse_mode="Markdown")
+            except BadRequest:
+                logger.warning(
+                    "Markdown parse failed in threat reply, falling back to plain text"
+                )
+                await update.message.reply_text(reply)
         else:
             await broadcast({"event": "pipeline_end", "reason": "no_threat"})
 
-            reply = f"*Анализ фото:*\n{result.description}\n\nНарушений не обнаружено."
-            await update.message.reply_text(reply, parse_mode="Markdown")
+            desc_escaped = escape_markdown(result.description)
+            reply = f"*Анализ фото:*\n{desc_escaped}\n\nНарушений не обнаружено."
+            try:
+                await update.message.reply_text(reply, parse_mode="Markdown")
+            except BadRequest:
+                logger.warning(
+                    "Markdown parse failed in no-threat reply, falling back to plain text"
+                )
+                await update.message.reply_text(reply)
 
     except Exception:
         logger.exception("Drone photo classification failed")

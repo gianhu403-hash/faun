@@ -147,6 +147,102 @@ class TestDroneBot:
         assert "не удалось проанализировать" not in text.lower()
 
     @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
+    @patch("cloud.vision.classifier.classify_photo", new_callable=AsyncMock)
+    async def test_photo_description_with_markdown_chars(
+        self, mock_classify, mock_broadcast
+    ):
+        """No-threat path: description with Markdown special chars must not crash."""
+        result = MagicMock()
+        result.description = "Лес с _подлеском_ и *кустами* у [реки]"
+        result.has_felling = False
+        result.has_human = False
+        result.has_fire = False
+        result.is_threat = False
+        mock_classify.return_value = result
+
+        update = _make_photo_update(500)
+        await drone_photo_handler(update, MagicMock())
+
+        # Must NOT fall into the outer except → "Не удалось проанализировать"
+        final_text = update.message.reply_text.call_args[0][0]
+        assert "не удалось проанализировать" not in final_text.lower()
+        assert "нарушений не обнаружено" in final_text.lower()
+
+    @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
+    @patch("cloud.notify.telegram.send_confirmed", new_callable=AsyncMock)
+    @patch(
+        "cloud.agent.decision.compose_alert",
+        new_callable=AsyncMock,
+        return_value="Alert text",
+    )
+    @patch("cloud.notify.telegram.send_pending", new_callable=AsyncMock)
+    @patch("cloud.vision.classifier.classify_photo", new_callable=AsyncMock)
+    async def test_photo_threat_description_with_markdown_chars(
+        self,
+        mock_classify,
+        mock_send_pending,
+        mock_compose_alert,
+        mock_send_confirmed,
+        mock_broadcast,
+    ):
+        """Threat path: description with [brackets] must not crash reply_text."""
+        result = MagicMock()
+        result.description = "Обнаружена [незаконная_рубка] деревьев *хвойных*"
+        result.has_felling = True
+        result.has_human = False
+        result.has_fire = False
+        result.is_threat = True
+        mock_classify.return_value = result
+        mock_send_pending.return_value = MagicMock()
+
+        update = _make_photo_update(600)
+        await drone_photo_handler(update, MagicMock())
+
+        final_text = update.message.reply_text.call_args[0][0]
+        assert "не удалось проанализировать" not in final_text.lower()
+        assert "угроза" in final_text.lower() or "chainsaw" in final_text.lower()
+
+    @pytest.mark.asyncio
+    @patch("cloud.notify.drone_bot_handlers.broadcast", new_callable=AsyncMock)
+    @patch("cloud.vision.classifier.classify_photo", new_callable=AsyncMock)
+    async def test_photo_reply_markdown_fallback(self, mock_classify, mock_broadcast):
+        """If Markdown reply_text raises, fallback to plain text."""
+        from telegram.error import BadRequest
+
+        result = MagicMock()
+        result.description = "Лес и тропинка"
+        result.has_felling = False
+        result.has_human = False
+        result.has_fire = False
+        result.is_threat = False
+        mock_classify.return_value = result
+
+        update = _make_photo_update(700)
+        # First call is "Анализирую фото...", second is the Markdown reply
+        # Make Markdown reply raise BadRequest, then plain text should succeed
+        call_count = 0
+        original_reply = update.message.reply_text
+
+        async def reply_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if kwargs.get("parse_mode") == "Markdown":
+                raise BadRequest("Can't parse entities")
+            return None
+
+        update.message.reply_text = AsyncMock(side_effect=reply_side_effect)
+        await drone_photo_handler(update, MagicMock())
+
+        # Should have retried without parse_mode after BadRequest
+        calls = update.message.reply_text.call_args_list
+        # Last call must be plain text (no parse_mode)
+        last_call = calls[-1]
+        assert last_call.kwargs.get("parse_mode") is None
+        assert "не удалось проанализировать" not in last_call[0][0].lower()
+
+    @pytest.mark.asyncio
     @patch(
         "cloud.vision.classifier.classify_photo",
         new_callable=AsyncMock,
