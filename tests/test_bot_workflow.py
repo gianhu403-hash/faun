@@ -246,6 +246,25 @@ class TestLocationHandler:
         assert incident.status == "on_site"
 
     @pytest.mark.asyncio
+    async def test_location_near_sends_verdict_buttons(self, mock_bot):
+        incident = _create_test_incident(status="accepted", chat_id=601)
+        update = _make_location_update(601, incident.lat, incident.lon)
+        await location_handler(update, MagicMock())
+
+        update.message.reply_text.assert_awaited_once()
+        call_kwargs = update.message.reply_text.call_args
+        text = call_kwargs[0][0] if call_kwargs[0] else call_kwargs[1]["text"]
+        assert "Что на месте" in text
+        markup = (
+            call_kwargs[1]["reply_markup"]
+            if "reply_markup" in call_kwargs[1]
+            else call_kwargs.kwargs.get("reply_markup")
+        )
+        buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+        assert f"verdict:confirmed:{incident.id}" in buttons
+        assert f"verdict:false:{incident.id}" in buttons
+
+    @pytest.mark.asyncio
     async def test_location_far_shows_distance(self):
         incident = _create_test_incident(status="accepted", chat_id=700)
         # Send location far from incident (~111 km away)
@@ -260,8 +279,10 @@ class TestLocationHandler:
     async def test_location_no_active_incident(self):
         update = _make_location_update(800, 57.0, 45.0)
         await location_handler(update, MagicMock())
-        # Should not crash, just return
-        update.message.reply_text.assert_not_called()
+        # Should reply with a fallback message
+        update.message.reply_text.assert_awaited_once()
+        text = update.message.reply_text.call_args[0][0]
+        assert "нет активных" in text.lower()
 
     @pytest.mark.asyncio
     async def test_location_wrong_status_ignored(self):

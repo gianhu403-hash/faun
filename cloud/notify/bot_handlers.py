@@ -322,6 +322,7 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     incident = get_active_incident_for_chat(chat_id)
 
     if not incident:
+        await update.message.reply_text("Нет активных вызовов.")
         return
 
     if incident.status not in ("accepted",):
@@ -346,7 +347,25 @@ async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         incident.status = "on_site"
         incident.arrived_at = now
         incident.response_time_min = resp_min
-        await send_arrival_question(chat_id, incident)
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Нарушение подтверждено",
+                        callback_data=f"verdict:confirmed:{incident.id}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "Ложный вызов",
+                        callback_data=f"verdict:false:{incident.id}",
+                    ),
+                ],
+            ]
+        )
+        await update.message.reply_text(
+            "Вы рядом с точкой. Что на месте?", reply_markup=keyboard
+        )
     else:
         await update.message.reply_text(
             f"Вы в {dist:.0f} м от точки. Продолжайте движение."
