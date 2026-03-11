@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import math
 import os
 import random
 from contextlib import asynccontextmanager
@@ -16,48 +15,19 @@ from cloud.notify.drone_bot_app import start_drone_bot, stop_drone_bot
 logger = logging.getLogger(__name__)
 
 
-def _random_source_point(
-    mic_positions: list[tuple[float, float]], radius_m: float = 150.0
-) -> tuple[float, float]:
-    """Generate a random sound source near the centroid of mic positions."""
-    avg_lat = sum(p[0] for p in mic_positions) / len(mic_positions)
-    avg_lon = sum(p[1] for p in mic_positions) / len(mic_positions)
-    # Random distance 50-300m in random direction
-    dist = random.uniform(50.0, min(radius_m * 2, 300.0))
-    bearing = random.uniform(0, 2 * math.pi)
-    # Approximate degree offsets
-    dlat = (dist * math.cos(bearing)) / 111_320
-    dlon = (dist * math.sin(bearing)) / (111_320 * math.cos(math.radians(avg_lat)))
-    return round(avg_lat + dlat, 6), round(avg_lon + dlon, 6)
-
-
 async def _auto_demo():
     """Auto-start a demo scenario after container boot."""
     if os.getenv("DISABLE_AUTO_DEMO"):
         logger.info("Auto-demo disabled by DISABLE_AUTO_DEMO env var")
         return
-    delay = random.uniform(15, 25)
-    logger.info("Auto-demo scheduled in %.0f seconds", delay)
+    delay = random.uniform(45, 60)
+    logger.info("Auto-demo scheduled in %.0f seconds (waiting for healthcheck)", delay)
     await asyncio.sleep(delay)
 
-    from cloud.db.microphones import get_online
-
-    try:
-        online_mics = get_online()[:3]
-    except Exception:
-        logger.warning("Auto-demo: failed to fetch online mics")
-        return
-    if len(online_mics) < 3:
-        logger.warning("Auto-demo: need 3 online mics, got %d", len(online_mics))
-        return
-
-    mic_coords = [(m.lat, m.lon) for m in online_mics]
-    source_lat, source_lon = _random_source_point(mic_coords)
     scenario = random.choice(["chainsaw", "gunshot", "engine"])
-
-    logger.info("Auto-demo: %s at (%.4f, %.4f)", scenario, source_lat, source_lon)
+    logger.info("Auto-demo: %s", scenario)
     try:
-        await _run_demo(scenario, source_lat=source_lat, source_lon=source_lon)
+        await _run_demo(scenario)
     except Exception:
         logger.exception("Auto-demo failed")
 
@@ -355,12 +325,21 @@ async def check_permit(req: PermitCheck):
 
 # ---- RAG query API ----
 
-from cloud.agent.rag_agent import query_rag
+from cloud.agent.rag_agent import query_rag, query_rag_enriched, IncidentContext
 
 
 class RagQueryRequest(BaseModel):
     question: str
     context: str = ""
+    # Structured incident fields (optional, for enriched RAG)
+    audio_class: str | None = None
+    confidence: float | None = None
+    lat: float | None = None
+    lon: float | None = None
+    vision_description: str | None = None
+    has_felling: bool | None = None
+    has_human: bool | None = None
+    has_fire: bool | None = None
 
 
 class RagQueryResponse(BaseModel):
@@ -370,7 +349,47 @@ class RagQueryResponse(BaseModel):
 @app.post("/api/v1/rag-query", response_model=RagQueryResponse)
 async def rag_query_endpoint(req: RagQueryRequest):
     """Query RAG agent with File Search + Web Search (Yandex AI Studio)."""
-    answer = await query_rag(req.question, req.context)
+    try:
+        if req.audio_class:
+            ctx = IncidentContext(
+                audio_class=req.audio_class,
+                confidence=req.confidence or 0.0,
+                lat=req.lat or 0.0,
+                lon=req.lon or 0.0,
+                vision_description=req.vision_description or "",
+                has_felling=req.has_felling or False,
+                has_human=req.has_human or False,
+                has_fire=req.has_fire or False,
+            )
+            answer = await asyncio.wait_for(query_rag_enriched(ctx), timeout=25)
+        else:
+            answer = await asyncio.wait_for(
+                query_rag(req.question, req.context), timeout=25
+            )
+    except asyncio.TimeoutError:
+        logger.warning("RAG query timed out after 25s")
+        answer = (
+            "Превышено время ожидания ответа от YandexGPT.\n\n"
+            "## ПРАВОВАЯ БАЗА\nСт. 260 УК РФ, ст. 8.28 КоАП РФ, ст. 96 ЛК РФ\n\n"
+            "## КВАЛИФИКАЦИЯ\nТребуется детальный анализ после восстановления связи с YandexGPT.\n\n"
+            "## ДЕЙСТВИЯ ИНСПЕКТОРА\n"
+            "1. Оцените обстановку, не приближайтесь в одиночку\n"
+            "2. Зафиксируйте GPS-координаты\n"
+            "3. Сделайте фото/видео нарушения\n"
+            "4. Не вступайте в конфликт с нарушителями\n"
+            "5. Вызовите патрульную группу\n"
+            "6. Составьте акт по форме (ст. 96 ЛК РФ)"
+        )
+    except Exception as e:
+        logger.error("RAG query error: %s", e)
+        answer = (
+            "Ошибка при запросе к YandexGPT.\n\n"
+            "## ДЕЙСТВИЯ ИНСПЕКТОРА\n"
+            "1. Зафиксируйте GPS-координаты\n"
+            "2. Сделайте фото/видео нарушения\n"
+            "3. Вызовите патрульную группу\n"
+            "4. Составьте акт по форме (ст. 96 ЛК РФ)"
+        )
     return RagQueryResponse(answer=answer)
 
 
@@ -806,11 +825,8 @@ async def start_demo_legacy(scenario: str = "chainsaw"):
     return {"status": "started", "scenario": scenario}
 
 
-async def _run_demo(
-    scenario: str,
-    source_lat: float | None = None,
-    source_lon: float | None = None,
-):
+def _import_demo_deps():
+    """Import heavy demo dependencies (TF, simulators). May raise ImportError/MemoryError."""
     from simulator.audio.mic_stream import MicSimulator
     from simulator.drone.drone_stream import DroneSimulator
     from simulator.lora.socket_relay import LoraRelay
@@ -823,10 +839,44 @@ async def _run_demo(
     from cloud.agent.decision import compose_alert
     from cloud.notify.telegram import send_pending, send_confirmed
     from cloud.db.microphones import get_online
-    import os
 
-    # Read mic positions from DB (first 3 online), fallback to env vars
-    online_mics = get_online()[:3]
+    return {
+        "MicSimulator": MicSimulator,
+        "classify": classify,
+        "detect_onset": detect_onset_fn,
+        "triangulate": triangulate,
+        "MicPosition": MicPosition,
+        "decide": decide,
+        "SimulatedDrone": SimulatedDrone,
+        "classify_photo": classify_photo,
+        "compose_alert": compose_alert,
+        "send_pending": send_pending,
+        "send_confirmed": send_confirmed,
+        "get_online": get_online,
+    }
+
+
+async def _run_demo(
+    scenario: str,
+    source_lat: float | None = None,
+    source_lon: float | None = None,
+):
+    try:
+        deps = _import_demo_deps()
+    except Exception:
+        logger.exception("Demo: failed to import dependencies (TF/classifier)")
+        return
+
+    MicPosition = deps["MicPosition"]
+    import os
+    from cloud.db.microphones import random_point_in_boundary, get_nearest_online
+
+    # Generate random source in polygon if not specified
+    if source_lat is None or source_lon is None:
+        source_lat, source_lon = random_point_in_boundary()
+
+    # Find 3 nearest online mics to the source point
+    online_mics = get_nearest_online(source_lat, source_lon, n=3)
     if len(online_mics) >= 3:
         mic_positions = [MicPosition(lat=m.lat, lon=m.lon) for m in online_mics]
     else:
@@ -844,12 +894,6 @@ async def _run_demo(
                 lon=float(os.getenv("MIC_C_LON", 44.6489)),
             ),
         ]
-
-    mic_coords = [(m.lat, m.lon) for m in mic_positions]
-
-    # Generate random source if not specified
-    if source_lat is None or source_lon is None:
-        source_lat, source_lon = _random_source_point(mic_coords)
 
     home_lat = mic_positions[0].lat
     home_lon = mic_positions[0].lon
@@ -870,7 +914,7 @@ async def _run_demo(
     )
     await asyncio.sleep(0.5)
 
-    mic_sim = MicSimulator(
+    mic_sim = deps["MicSimulator"](
         scenario,
         source_lat=source_lat,
         source_lon=source_lon,
@@ -879,7 +923,7 @@ async def _run_demo(
     signals, audio_paths = await mic_sim.get_signals()
 
     # Onset detection — pre-filled quiet baseline so gunshot/engine also trigger
-    onset = detect_onset_fn(signals[0])
+    onset = deps["detect_onset"](signals[0])
     await broadcast(
         {
             "event": "onset_check",
@@ -897,7 +941,7 @@ async def _run_demo(
         )
         return
 
-    audio_result = classify(audio_paths[0])
+    audio_result = deps["classify"](audio_paths[0])
 
     # Demo override: synthetic demo files are too quiet for v7 head model.
     # Force expected class so the demo pipeline always completes.
@@ -924,9 +968,9 @@ async def _run_demo(
     )
     await asyncio.sleep(0.3)
 
-    location = triangulate(signals, mic_positions)
+    location = deps["triangulate"](signals, mic_positions)
 
-    decision = decide(audio_result, location)
+    decision = deps["decide"](audio_result, location)
 
     await broadcast(
         {
@@ -950,7 +994,9 @@ async def _run_demo(
         await broadcast({"event": "pipeline_end", "reason": "no_anomaly"})
         return
 
-    drone = SimulatedDrone(home_lat=home_lat, home_lon=home_lon, scenario=scenario)
+    drone = deps["SimulatedDrone"](
+        home_lat=home_lat, home_lon=home_lon, scenario=scenario
+    )
     await drone.takeoff()
 
     async def drone_task():
@@ -963,7 +1009,7 @@ async def _run_demo(
     # send_pending creates an Incident and returns it
     photo, incident = await asyncio.gather(
         drone_task(),
-        send_pending(
+        deps["send_pending"](
             location.lat,
             location.lon,
             audio_result.label,
@@ -973,7 +1019,7 @@ async def _run_demo(
         ),
     )
 
-    vision_result = await classify_photo(photo.b64)
+    vision_result = await deps["classify_photo"](photo.b64)
     await broadcast(
         {
             "event": "vision_classified",
@@ -985,7 +1031,7 @@ async def _run_demo(
         }
     )
 
-    alert = await compose_alert(
+    alert = await deps["compose_alert"](
         audio_class=audio_result.label,
         visual_description=vision_result.description,
         lat=location.lat,
@@ -993,7 +1039,7 @@ async def _run_demo(
         confidence=audio_result.confidence,
     )
     # Store drone photo in incident (sent to ranger after accept)
-    await send_confirmed(alert, photo.data, incident=incident)
+    await deps["send_confirmed"](alert, photo.data, incident=incident)
     await broadcast(
         {"event": "alert_sent", "text": alert.text, "priority": alert.priority}
     )

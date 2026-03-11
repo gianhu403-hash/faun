@@ -10,8 +10,11 @@ Environment variables:
   SEARCH_INDEX_ID     — File Search index ID (optional, enables RAG via SDK)
 """
 
+import asyncio
 import os
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime
 
 import httpx
 
@@ -85,41 +88,44 @@ CLASS_CONTEXT = {
 }
 
 
+def _call_yandex_with_sdk_sync(prompt: str) -> str:
+    """Synchronous SDK call — runs in a thread to avoid blocking event loop."""
+    from yandex_ai_studio_sdk import AIStudio
+
+    sdk = AIStudio(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_API_KEY)
+    search_index = sdk.search_indexes.get(SEARCH_INDEX_ID)
+    file_search_tool = sdk.tools.search_index(search_index)
+
+    tools = [file_search_tool]
+    try:
+        web_search_tool = sdk.tools.web_search(
+            allowed_domains=["consultant.ru", "garant.ru", "rg.ru"],
+            search_context_size="medium",
+        )
+        tools.append(web_search_tool)
+    except Exception as e:
+        logger.warning("Web Search tool init failed (SDK may not support it): %s", e)
+
+    assistant = sdk.assistants.create(
+        "yandexgpt",
+        tools=tools,
+        instruction=SYSTEM_PROMPT,
+    )
+    thread = sdk.threads.create()
+    thread.write(prompt)
+    run = assistant.run(thread)
+    result = run.wait(poll_interval=0.5)
+    answer = result.text
+
+    thread.delete()
+    assistant.delete()
+    return answer
+
+
 async def _call_yandex_with_sdk(prompt: str) -> str:
     """Call YandexGPT via SDK with File Search + Web Search (Assistants API)."""
     try:
-        from yandex_ai_studio_sdk import AIStudio
-
-        sdk = AIStudio(folder_id=YANDEX_FOLDER_ID, auth=YANDEX_API_KEY)
-        search_index = sdk.search_indexes.get(SEARCH_INDEX_ID)
-        file_search_tool = sdk.tools.search_index(search_index)
-
-        tools = [file_search_tool]
-        try:
-            web_search_tool = sdk.tools.web_search(
-                allowed_domains=["consultant.ru", "garant.ru", "rg.ru"],
-                search_context_size="medium",
-            )
-            tools.append(web_search_tool)
-        except Exception as e:
-            logger.warning(
-                "Web Search tool init failed (SDK may not support it): %s", e
-            )
-
-        assistant = sdk.assistants.create(
-            "yandexgpt",
-            tools=tools,
-            instruction=SYSTEM_PROMPT,
-        )
-        thread = sdk.threads.create()
-        thread.write(prompt)
-        run = assistant.run(thread)
-        result = run.wait(poll_interval=0.5)
-        answer = result.text
-
-        thread.delete()
-        assistant.delete()
-        return answer
+        return await asyncio.to_thread(_call_yandex_with_sdk_sync, prompt)
     except ImportError:
         logger.warning("yandex_ai_studio_sdk not installed, falling back to plain API")
         return await _call_yandex_plain(prompt)
@@ -139,7 +145,7 @@ async def _call_yandex_plain(prompt: str) -> str:
                 "completionOptions": {
                     "stream": False,
                     "temperature": 0.2,
-                    "maxTokens": 1500,
+                    "maxTokens": 2500,
                 },
                 "messages": [
                     {"role": "system", "text": SYSTEM_PROMPT},
@@ -250,6 +256,170 @@ async def query_rag(question: str, context: str = "") -> str:
     prompt = question
     if context:
         prompt = f"Контекст: {context}\n\nВопрос: {question}"
+
+    if SEARCH_INDEX_ID:
+        return await _call_yandex_with_sdk(prompt)
+    return await _call_yandex_plain(prompt)
+
+
+# ---------------------------------------------------------------------------
+# Enriched RAG — context-aware recommendations for dashboard
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IncidentContext:
+    """Structured incident context for enriched RAG query."""
+
+    audio_class: str = ""
+    confidence: float = 0.0
+    lat: float = 0.0
+    lon: float = 0.0
+    vision_description: str = ""
+    has_felling: bool = False
+    has_human: bool = False
+    has_fire: bool = False
+
+
+def _build_enriched_prompt(ctx: IncidentContext) -> str:
+    """Build a dynamic prompt enriched with system context."""
+    from cloud.integrations.fgis_lk import fgis_client
+    from cloud.db.permits import has_valid_permit
+
+    # --- Gather context from subsystems ---
+    forest_unit = None
+    permit_status = "не проверялось"
+    if ctx.lat and ctx.lon:
+        try:
+            forest_unit = fgis_client.get_forest_unit(ctx.lat, ctx.lon)
+        except Exception:
+            pass
+        try:
+            if has_valid_permit(ctx.lat, ctx.lon):
+                permit_status = "ЕСТЬ действующая лесная декларация"
+            else:
+                permit_status = "НЕТ действующей лесной декларации"
+        except Exception:
+            pass
+
+    hour = datetime.now().hour
+    time_of_day = "ночь (отягчающий фактор)" if hour < 6 or hour >= 22 else "день"
+
+    class_desc = CLASS_CONTEXT.get(
+        ctx.audio_class, f"неизвестное нарушение ({ctx.audio_class})"
+    )
+
+    # --- Build prompt sections ---
+    parts = [f"## Инцидент\n\nОбнаружено: **{class_desc}**"]
+
+    if ctx.confidence:
+        parts.append(f"Уверенность классификатора: **{ctx.confidence * 100:.0f}%**")
+
+    if ctx.lat and ctx.lon:
+        parts.append(f"Координаты: {ctx.lat:.4f}°N, {ctx.lon:.4f}°E")
+
+    parts.append(f"Время: {datetime.now().strftime('%H:%M')} ({time_of_day})")
+    parts.append(f"Лесная декларация: {permit_status}")
+
+    if forest_unit:
+        parts.append(
+            f"\n## Данные ФГИС ЛК\n"
+            f"Квартал: №{forest_unit.quarter_number}, "
+            f"участковое лесничество: {forest_unit.sub_district}\n"
+            f"Породный состав: {forest_unit.species_composition}\n"
+            f"Тип зоны: {forest_unit.zone_type}, площадь: {forest_unit.area_ha} га"
+        )
+
+    if ctx.vision_description:
+        parts.append(
+            f"\n## Визуальный анализ (дрон + Gemma 3)\n{ctx.vision_description}"
+        )
+        details = []
+        if ctx.has_felling:
+            details.append("обнаружена рубка")
+        if ctx.has_human:
+            details.append("присутствуют люди")
+        if ctx.has_fire:
+            details.append("обнаружен огонь")
+        if details:
+            parts.append("Визуальные признаки: " + ", ".join(details))
+
+    # --- Confidence-adaptive instructions ---
+    parts.append("\n## Задание")
+
+    if ctx.confidence >= 0.8:
+        parts.append(
+            "Уверенность классификатора ВЫСОКАЯ. Дай конкретные пошаговые действия "
+            "для инспектора, как если бы нарушение подтверждено."
+        )
+    elif ctx.confidence >= 0.5:
+        parts.append(
+            "Уверенность классификатора СРЕДНЯЯ. Рекомендуй действия по верификации "
+            "и параллельно — шаги на случай подтверждения нарушения."
+        )
+    else:
+        parts.append(
+            "Уверенность классификатора НИЗКАЯ. Приоритет — верификация: "
+            "какие дополнительные данные собрать, чтобы подтвердить или опровергнуть."
+        )
+
+    # --- Permit-aware branching ---
+    if permit_status.startswith("ЕСТЬ"):
+        parts.append(
+            "ВНИМАНИЕ: в этой зоне есть действующая лесная декларация. "
+            "Проверь соответствие фактической деятельности условиям декларации "
+            "(вид рубки, объём, сроки, подрядчик)."
+        )
+
+    # --- Damage calculation instruction ---
+    if forest_unit and ctx.audio_class in ("chainsaw", "axe"):
+        parts.append(
+            f"\nРассчитай примерный размер вреда по таксам ПП РФ №1730 "
+            f"для породного состава «{forest_unit.species_composition}». "
+            f"Укажи формулу и коэффициенты."
+        )
+
+    # --- Dynamic question ---
+    class_questions = {
+        "chainsaw": "незаконной рубке леса",
+        "axe": "незаконной рубке леса",
+        "gunshot": "факте незаконной охоты / браконьерства",
+        "engine": "несанкционированном заезде техники в лес",
+        "fire": "лесном пожаре",
+    }
+    question_topic = class_questions.get(ctx.audio_class, "обнаруженном нарушении")
+    parts.append(
+        f"\nКакие действия должен предпринять инспектор при {question_topic}? "
+        f"Какие статьи ЛК РФ, УК РФ, КоАП применимы?"
+    )
+
+    # --- Response structure ---
+    parts.append(
+        "\n## Формат ответа\n"
+        "Ответь строго по следующей структуре:\n\n"
+        "## ПРАВОВАЯ БАЗА\n"
+        "Применимые статьи ЛК РФ, УК РФ, КоАП РФ с точными частями и пунктами. "
+        "Для каждой статьи — цитата или краткое содержание из нормативного документа. "
+        "Расчёт ущерба по ПП РФ №1730 (если есть данные о породе).\n\n"
+        "## КВАЛИФИКАЦИЯ\n"
+        "Интерпретация каждой статьи в контексте данного инцидента: "
+        "почему именно эта часть/пункт, какие признаки состава выполнены, "
+        "отягчающие обстоятельства (ночь, группа лиц, особо защитные участки).\n\n"
+        "## ДЕЙСТВИЯ ИНСПЕКТОРА\n"
+        "Пошаговый чеклист (нумерованный список): "
+        "1) оценка безопасности и меры предосторожности, "
+        "2) фиксация доказательств, "
+        "3) процессуальные действия, "
+        "4) вызов подкрепления при необходимости."
+    )
+
+    return "\n".join(parts)
+
+
+async def query_rag_enriched(ctx: IncidentContext) -> str:
+    """Context-aware RAG query with enriched prompt for dashboard."""
+    prompt = _build_enriched_prompt(ctx)
+    logger.info("Enriched RAG prompt length: %d chars", len(prompt))
 
     if SEARCH_INDEX_ID:
         return await _call_yandex_with_sdk(prompt)

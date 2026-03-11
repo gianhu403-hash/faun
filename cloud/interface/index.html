@@ -283,10 +283,34 @@
             border: 1px solid #1a1e2a;
             font-size: 11px;
             line-height: 1.6;
-            color: #00ff41;
-            max-height: 200px;
+            color: #c8c8d0;
+            max-height: 400px;
             overflow-y: auto;
-            white-space: pre-wrap;
+        }
+        .rag-response .rag-heading {
+            color: #00ff41;
+            font-size: 12px;
+            font-weight: 700;
+            margin: 10px 0 4px 0;
+            letter-spacing: 1px;
+        }
+        .rag-response .rag-heading:first-child { margin-top: 0; }
+        .rag-response .rag-bold {
+            color: #f0a030;
+            font-weight: 700;
+        }
+        .rag-response .rag-item {
+            padding-left: 12px;
+            position: relative;
+        }
+        .rag-response .rag-item::before {
+            content: '\2022';
+            position: absolute;
+            left: 2px;
+            color: #555;
+        }
+        .rag-response .rag-num {
+            padding-left: 4px;
         }
 
         /* Protocol link */
@@ -994,6 +1018,46 @@
         }
 
         /* ---- RAG query ---- */
+        function escapeHtml(str) {
+            var d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function applyBold(escapedText) {
+            return escapedText.replace(/\*\*(.+?)\*\*/g, '<span class="rag-bold">$1</span>');
+        }
+
+        function formatRAGResponse(text) {
+            var container = document.createElement('div');
+            container.className = 'rag-response';
+            var lines = text.split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                if (/^##\s+/.test(line)) {
+                    var h = document.createElement('div');
+                    h.className = 'rag-heading';
+                    h.textContent = line.replace(/^##\s+/, '');
+                    container.appendChild(h);
+                } else if (/^\d+\.\s+/.test(line)) {
+                    var num = document.createElement('div');
+                    num.className = 'rag-num';
+                    num.innerHTML = applyBold(escapeHtml(line));
+                    container.appendChild(num);
+                } else if (/^[-\u2022]\s+/.test(line)) {
+                    var li = document.createElement('div');
+                    li.className = 'rag-item';
+                    li.innerHTML = applyBold(escapeHtml(line.replace(/^[-\u2022]\s+/, '')));
+                    container.appendChild(li);
+                } else if (line.trim()) {
+                    var p = document.createElement('div');
+                    p.innerHTML = applyBold(escapeHtml(line));
+                    container.appendChild(p);
+                }
+            }
+            return container;
+        }
+
         function queryRAG() {
             var btn = sidebar.querySelector('.rag-btn');
             var result = document.getElementById('rag-result');
@@ -1003,27 +1067,37 @@
             btn.textContent = 'ЗАПРОС...';
             result.textContent = '';
 
-            var ctx = [];
-            if (incident.audioClass) ctx.push('Звук: ' + incident.audioClass);
-            if (incident.confidence) ctx.push('Уверенность: ' + (incident.confidence * 100).toFixed(0) + '%');
-            if (incident.lat) ctx.push('Координаты: ' + incident.lat.toFixed(4) + ', ' + incident.lon.toFixed(4));
+            var classQuestions = {
+                chainsaw: 'незаконной рубке леса',
+                axe: 'незаконной рубке леса',
+                gunshot: 'факте незаконной охоты',
+                engine: 'несанкционированном заезде техники',
+                fire: 'лесном пожаре'
+            };
+            var topic = classQuestions[incident.audioClass] || 'обнаруженном нарушении';
+
+            var payload = {
+                question: 'Какие действия должен предпринять инспектор при ' + topic + '? Какие статьи ЛК РФ, УК РФ, КоАП применимы?'
+            };
+            if (incident.audioClass) payload.audio_class = incident.audioClass;
+            if (incident.confidence) payload.confidence = incident.confidence;
+            if (incident.lat) { payload.lat = incident.lat; payload.lon = incident.lon; }
             if (incident.vision) {
-                ctx.push('Визуально: ' + incident.vision.description);
-                if (incident.vision.has_felling) ctx.push('Обнаружена рубка');
+                payload.vision_description = incident.vision.description || '';
+                payload.has_felling = !!incident.vision.has_felling;
+                payload.has_human = !!incident.vision.has_human;
+                payload.has_fire = !!incident.vision.has_fire;
             }
 
             fetch('/api/v1/rag-query', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    question: 'Какие действия должен предпринять инспектор при обнаружении незаконной рубки? Какие статьи ЛК РФ, УК РФ, КоАП применимы?',
-                    context: ctx.join('. ')
-                })
-            }).then(function(r) { return r.json(); }).then(function(data) {
-                var resp = document.createElement('div');
-                resp.className = 'rag-response';
-                resp.textContent = data.answer;
-                result.appendChild(resp);
+                body: JSON.stringify(payload)
+            }).then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            }).then(function(data) {
+                result.appendChild(formatRAGResponse(data.answer));
             }).catch(function(e) {
                 var resp = document.createElement('div');
                 resp.className = 'rag-response';
