@@ -27,7 +27,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./demo/audio:/app/demo/audio
+      - .:/app
       - yamnet_cache:/tmp/yamnet_cache
     restart: unless-stopped
 
