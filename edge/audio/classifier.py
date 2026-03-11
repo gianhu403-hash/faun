@@ -18,7 +18,7 @@ AudioClass = Literal[
 
 MODEL_PATH = os.environ.get(
     "YAMNET_HEAD_PATH",
-    os.path.join(os.path.dirname(__file__), "yamnet_forest_classifier_v7.keras"),
+    os.path.join(os.path.dirname(__file__), "yamnet_forest_classifier_v8.keras"),
 )
 
 # Mapping from YAMNet base class names to our target classes
@@ -159,9 +159,53 @@ def classify(audio_path: str) -> AudioResult:
     if head is not None:
         mean_emb = emb_np.mean(axis=0)
         max_emb = emb_np.max(axis=0)
-        features = np.concatenate([mean_emb, max_emb])
+        features_parts = [np.concatenate([mean_emb, max_emb])]  # 2048
 
+        # PCEN (128-dim)
+        try:
+            import librosa
+
+            S = librosa.feature.melspectrogram(
+                y=waveform,
+                sr=16000,
+                n_mels=64,
+                fmin=125,
+                fmax=7500,
+                hop_length=160,
+                n_fft=400,
+            )
+            pcen_S = librosa.pcen(
+                S * (2**31),
+                sr=16000,
+                hop_length=160,
+                gain=0.98,
+                bias=2,
+                power=0.5,
+                time_constant=0.4,
+            )
+            features_parts.append(
+                np.concatenate([pcen_S.mean(axis=1), pcen_S.max(axis=1)])
+            )
+        except Exception as e:
+            logger.warning("PCEN failed: %s", e)
+            features_parts.append(np.zeros(128))
+
+        # Temporal variance (5-dim)
+        try:
+            if scores_np.shape[0] >= 2:
+                variance = np.var(scores_np, axis=0)
+                top5 = np.argsort(variance)[-5:]
+                features_parts.append(variance[top5])
+            else:
+                features_parts.append(np.zeros(5))
+        except Exception:
+            features_parts.append(np.zeros(5))
+
+        features = np.concatenate(features_parts)  # 2181
+
+        # Backward compat: truncate if old model loaded
         expected_dim = head.input_shape[-1]
+        features = features[:expected_dim]
         if features.shape[0] < expected_dim:
             features = np.concatenate(
                 [features, np.zeros(expected_dim - features.shape[0])]

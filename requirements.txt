@@ -4,6 +4,7 @@ numpy>=1.24
 scipy>=1.11
 soundfile>=0.12
 sounddevice>=0.4
+librosa>=0.10
 
 asyncio
 
