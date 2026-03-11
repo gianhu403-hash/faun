@@ -283,3 +283,70 @@ AUDIT chat_id=<id> action=<action> incident=<id> result=<result>
 
 [На карте]  [Принять вызов]  [Отложить 15 мин]
 ```
+
+---
+
+## Drone Bot
+
+Второй Telegram-бот для приёма фотографий с дрона или телефона. Анализирует фото через Gemma 3 27B Vision и при обнаружении угрозы запускает полный pipeline алертинга через Ranger Bot.
+
+**Файлы:** `cloud/notify/drone_bot_app.py`, `cloud/notify/drone_bot_handlers.py`
+
+**Env var:** `TELEGRAM_DRONE_BOT_TOKEN`
+
+### Команды
+
+| Команда | Описание |
+|---------|----------|
+| `/start` | Приветственное сообщение |
+
+### Photo Handler Pipeline
+
+```mermaid
+sequenceDiagram
+    participant Phone as Телефон / Дрон
+    participant Bot as Drone Bot
+    participant Vision as Gemma 3 27B
+    participant Ranger as Ranger Bot
+    participant GPT as YandexGPT
+    participant Dash as Dashboard
+
+    Phone->>Bot: Фото
+    Bot->>Bot: "Анализирую фото..."
+    Bot->>Vision: classify_photo(photo_b64)
+    Vision-->>Bot: VisionResult (description, is_threat, ...)
+    Bot->>Dash: WebSocket: vision_classified + drone_photo
+
+    alt is_threat = true
+        Bot->>Ranger: send_pending(audio_class, lat, lon)
+        Ranger-->>Bot: Incident created
+        Bot->>GPT: compose_alert(visual_description, ...)
+        GPT-->>Bot: Alert text
+        Bot->>Ranger: send_confirmed(alert, photo, incident)
+        Bot->>Dash: WebSocket: alert_sent, pipeline_end
+        Bot->>Phone: "Обнаружена угроза: {class}, координаты, инцидент создан"
+    else is_threat = false
+        Bot->>Dash: WebSocket: pipeline_end (no_threat)
+        Bot->>Phone: "Нарушений не обнаружено"
+    end
+```
+
+### Маппинг Vision → Audio Class
+
+При обнаружении угрозы Vision-результат маппится на класс для совместимости с pipeline:
+
+| Vision-флаг | Audio class |
+|-------------|------------|
+| `has_machinery` | `engine` |
+| `has_felling` | `chainsaw` |
+| `has_fire` | `fire` |
+| `has_human` (без других) | `axe` |
+
+### Text Handler
+
+Нефото-сообщения получают ответ: "Отправьте фото для анализа. Я принимаю только снимки."
+
+### Error Handling
+
+- Markdown fallback: при ошибке парсинга Markdown v1 отправляет plain text
+- Escape Markdown: специальные символы `_`, `*`, `` ` ``, `[` экранируются

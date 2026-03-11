@@ -42,12 +42,36 @@ Model: gpt://{FOLDER_ID}/yandexgpt
 
 ### System Prompt
 
-> Ты — система мониторинга леса ForestGuard.
-> Получаешь данные от акустических датчиков и дрона.
-> Твоя задача: написать чёткий алерт егерю.
-> - Пиши по-русски, коротко и конкретно
-> - Укажи координаты, тип угрозы, рекомендацию
-> - 2-3 предложения максимум
+> Ты — AI-система акустического мониторинга леса Faun.
+> Получаешь данные от акустических датчиков и камеры дрона.
+> Твоя задача: написать чёткий, КОНКРЕТНЫЙ алерт егерю.
+> - Пиши по-русски, кратко, по существу
+> - Укажи ТИП УГРОЗЫ и конкретные визуальные признаки
+> - Если обнаружены люди — укажи и рекомендуй осторожность
+> - Если обнаружена техника — укажи тип и масштаб
+> - Если обнаружен огонь — приоритет: безопасность инспектора
+> - Дай 1-2 КОНКРЕТНЫХ действия
+> - Координаты уже указаны в карточке — НЕ дублируй
+> - 3-4 предложения максимум
+
+### compose_alert() — расширенные данные
+
+Функция `compose_alert()` теперь принимает дополнительные визуальные поля:
+
+```python
+async def compose_alert(
+    audio_class: str,
+    visual_description: str,
+    lat: float, lon: float,
+    confidence: float,
+    has_human: bool = False,
+    has_fire: bool = False,
+    has_felling: bool = False,
+    has_machinery: bool = False,
+) -> Alert:
+```
+
+Визуальные признаки добавляются к промпту: "обнаружены люди", "открытый огонь", "следы/процесс рубки", "тяжёлая техника".
 
 ### Priority Map
 
@@ -88,6 +112,10 @@ graph LR
 - **Контекст:** medium
 - Резервный — инициализируется отдельно, ошибка не блокирует работу
 
+### SDK Timeout
+
+Timeout для SDK (Assistants API): **15 секунд** (`RAG_SDK_TIMEOUT` env var). При превышении — fallback на plain YandexGPT.
+
 ### Функции RAG
 
 | Функция | Описание |
@@ -97,6 +125,7 @@ graph LR
 | `legalize_report(class, raw_text)` | Юридизация описания рейнджера |
 | `query_legal_articles(class, lat, lon)` | Только статьи (для PDF) |
 | `query_rag(question, context)` | Общий RAG-запрос (REST API) |
+| `query_rag_enriched(ctx)` | RAG с полным контекстом инцидента (vision fields) |
 
 ### Маппинг нарушений
 
@@ -167,7 +196,7 @@ Model: gemma-3-27b-it
 
 - OpenAI-compatible API
 - Input: base64 JPEG + текстовый промпт
-- Output: JSON `{description, has_human, has_fire, has_felling}`
+- Output: расширенный JSON (см. VisionResult ниже)
 - `temperature: 0.1`, `max_tokens: 256`
 
 ### yandexgpt-vision-lite (fallback)
@@ -182,11 +211,27 @@ Model: gpt://{FOLDER_ID}/yandexgpt-vision-lite
 ```python
 @dataclass
 class VisionResult:
-    description: str   # "На снимке — участок хвойного леса..."
-    has_human: bool     # Обнаружены люди
-    has_fire: bool      # Обнаружен огонь
-    has_felling: bool   # Обнаружены следы вырубки
+    description: str           # "На снимке — участок хвойного леса..." (3-5 предложений)
+    has_human: bool            # Обнаружены люди
+    has_fire: bool             # Обнаружен огонь
+    has_felling: bool          # Обнаружены следы вырубки
+    has_machinery: bool        # Обнаружена тяжёлая техника
+    is_threat: bool            # Есть признаки нарушения
+    time_of_day: str = ""      # "утро/день/вечер/ночь" (по теням и освещению)
+    people_count: int = 0      # Количество людей
+    equipment_types: list[str] = []  # ["бензопила", "лесовоз", "харвестер", ...]
+    vegetation_damage: str = ""      # "нет/незначительное/умеренное/значительное"
+    damage_area_estimate: str = ""   # "нет/малая/средняя/большая"
 ```
+
+### Safety Net
+
+LLM может ошибочно сказать `is_threat=false` при очевидных угрозах. Код перезаписывает:
+
+- `has_machinery=True` → `is_threat=True`
+- `has_human=True` + (`has_felling` или `has_fire` или ключевые слова в description) → `is_threat=True`
+
+Ключевые слова: "топор", "бензопил", "пила", "ружь", "винтовк", "оружи".
 
 ---
 

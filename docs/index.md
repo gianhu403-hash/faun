@@ -8,14 +8,17 @@
 
 ## Возможности
 
-- **Акустическая классификация** — YAMNet v7 распознаёт 6 типов звуков: бензопила, выстрел, двигатель, топор, огонь, фон
+- **Акустическая классификация** — YAMNet v7/v8 распознаёт 6 типов звуков: бензопила, выстрел, двигатель, топор, огонь, фон
 - **Триангуляция** — TDOA v5 определяет координаты источника по массиву из 3 микрофонов
-- **Confidence Gating** — 3 уровня реагирования: alert / verify / log
-- **Telegram-бот** — зональные уведомления рейнджерам с inline-действиями
-- **YandexGPT** — AI-генерация алертов с юридическим контекстом
-- **RAG-агент** — поиск по 9 нормативным документам (File Search + Web Search)
-- **Дрон** — автоматический вылет для фото-верификации (ArduPilot)
-- **Дашборд** — веб-интерфейс на Leaflet с real-time картой инцидентов
+- **Confidence Gating** — 3 уровня реагирования (alert / verify / log) с дифференцированными порогами по классам
+- **Два Telegram-бота** — Ranger Bot (зональные алерты, регистрация, workflow) + Drone Bot (фото → Vision)
+- **YandexGPT** — AI-генерация контекстных алертов с визуальными деталями
+- **RAG-агент** — поиск по 9 нормативным документам (File Search + Web Search + enriched context)
+- **Vision (Gemma 3 27B)** — расширенный анализ фото: техника, повреждения, оценка площади ущерба
+- **Дрон** — автоматический вылет для фото-верификации (ArduPilot / симулятор)
+- **Protocol PDF** — автоматическая генерация Акта патрулирования (LaTeX + RAG)
+- **Edge HTTP API** — изолированная классификация на порту 8001 (TF в отдельном контейнере)
+- **Дашборд** — веб-интерфейс на Leaflet с real-time картой + DataLens аналитика
 
 ---
 
@@ -25,18 +28,19 @@
 
 | Сервис | Порт | Назначение |
 |--------|------|------------|
-| **cloud** | `:8000` | FastAPI дашборд, Telegram-бот, YandexGPT, RAG-агент |
-| **edge** | — | YAMNet classifier, TDOA триангуляция, decision engine |
+| **cloud** | `:8000` | FastAPI дашборд, 2 Telegram-бота, YandexGPT, RAG-агент, Protocol PDF |
+| **edge** | `:8001` | YAMNet v7/v8 classifier, TDOA триангуляция, decision engine, HTTP classify API |
 | **lora_gateway** | `:9000` | LoRa mesh relay для связи edge ↔ cloud |
 
 ```mermaid
 graph LR
-    MIC[🎤 Микрофоны] --> EDGE[Edge Service]
+    MIC[🎤 Микрофоны] --> EDGE[Edge Service :8001]
     EDGE --> LORA[LoRa Gateway :9000]
     LORA --> CLOUD[Cloud Service :8000]
-    CLOUD --> TG[Telegram Bot]
-    CLOUD --> DASH[Web Dashboard]
+    CLOUD --> TG[Ranger Bot + Drone Bot]
+    CLOUD --> DASH[Web Dashboard + DataLens]
     CLOUD --> DRONE[🚁 Drone]
+    CLOUD --> PDF[📄 Protocol PDF]
 ```
 
 ---

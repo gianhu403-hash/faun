@@ -16,9 +16,26 @@
 |-------|------|----------|
 | `GET` | `/health` | Healthcheck, возвращает `{"status": "ok"}` |
 | `GET` | `/` | HTML дашборд (Leaflet карта) |
+| `GET` | `/analytics` | HTML страница DataLens-аналитики (full-screen) |
 | `WS` | `/ws` | WebSocket — real-time события |
 | `POST` | `/api/v1/demo` | Запуск демо-сценария |
 | `POST` | `/demo/start` | Legacy: запуск демо (обратная совместимость) |
+
+### Protocol PDF
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| `GET` | `/api/v1/incidents/{incident_id}/protocol.pdf` | Скачать PDF-протокол (Акт патрулирования) |
+
+Протокол генерируется автоматически при первом запросе: RAG-агент подбирает правовые статьи, затем LuaLaTeX (Jinja2 шаблон с кастомными делимитерами `\VAR{}`, `\BLOCK{}`) или fpdf2 (fallback) формирует PDF по форме Приказа Минприроды N 955. Результат кэшируется в поле `incident.protocol_pdf`.
+
+### Edge Classify API (:8001)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| `POST` | `/api/v1/classify` | Классификация аудиофайла через YAMNet |
+
+Отдельный FastAPI-сервер на порту 8001 внутри edge-контейнера. Принимает WAV-файл (multipart/form-data), возвращает `{label, confidence, raw_scores}`. Cloud-сервис использует этот endpoint вместо прямого импорта TensorFlow.
 
 ### Rangers (Рейнджеры)
 
@@ -199,7 +216,7 @@ Response:
 | `agent_decision` | `send_drone, priority, reason` | Решение |
 | `drone_moving` | `lat, lon` | Позиция дрона |
 | `drone_photo` | `drone_b64` | Фото с дрона |
-| `vision_classified` | `description, has_human, has_fire, has_felling` | Vision |
+| `vision_classified` | `description, has_human, has_fire, has_felling, has_machinery, is_threat, time_of_day, people_count, equipment_types, vegetation_damage, damage_area_estimate` | Vision (расширенный) |
 | `alert_sent` | `text, priority` | Алерт отправлен |
 | `agent_verified` | `priority, context_analysis, recommended_action` | AI верификация |
 | `pipeline_end` | `reason` | Pipeline завершён |
@@ -244,6 +261,20 @@ class PermitCheck(BaseModel):
 class RagQueryRequest(BaseModel):
     question: str
     context: str = ""
+    # Structured incident fields (optional, for enriched RAG)
+    audio_class: str | None = None
+    confidence: float | None = None
+    lat: float | None = None
+    lon: float | None = None
+    vision_description: str | None = None
+    has_felling: bool | None = None
+    has_human: bool | None = None
+    has_fire: bool | None = None
+    has_machinery: bool | None = None
+    people_count: int | None = None
+    equipment_types: list[str] | None = None
+    vegetation_damage: str | None = None
+    damage_area_estimate: str | None = None
 
 class ClassifyRequest(BaseModel):
     embeddings: list[float]

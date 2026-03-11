@@ -15,15 +15,16 @@ services:
 
 | Сервис | Порт | Healthcheck | Зависимости |
 |--------|------|-------------|-------------|
-| **cloud** | `:8000` | `GET /health` (30s interval, 10s timeout, 3 retries) | `lora_gateway` |
-| **edge** | — | — | — |
+| **cloud** | `:8000` | `curl /health` (120s interval, 10s timeout, 3 retries, 360s start period) | `lora_gateway` |
+| **edge** | `:8001` | — | — |
 | **lora_gateway** | `:9000` | — | — |
+
+**Edge** запускается командой: `sh -c "python demo/generate_audio.py && python -m edge.server"` — сначала скачивает/генерирует демо-аудио, затем запускает основной pipeline.
 
 ### Volumes
 
-- `.:/app` — монтирование кода в контейнер cloud
-- `./demo/audio:/app/demo/audio` — демо-аудио для edge
-- `yamnet_cache:/tmp/yamnet_cache` — общий кэш модели YAMNet (shared между cloud и edge)
+- `.:/app` — монтирование кода (cloud и edge)
+- `yamnet_cache:/tmp/yamnet_cache` — общий named volume для кэша модели YAMNet (shared между cloud и edge)
 
 Все сервисы используют политику `restart: unless-stopped`.
 
@@ -35,16 +36,18 @@ services:
 FROM python:3.11-slim
 
 # Системные зависимости
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 libsndfile1-dev ffmpeg curl \
-    fonts-dejavu-core build-essential
+    fonts-dejavu-core build-essential \
+    texlive-luatex texlive-latex-extra texlive-lang-cyrillic \
+    fonts-paratype
 
 # Python зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 5 --timeout 60 -r requirements.txt
 
 # Валидация SDK
-RUN python -c "import yandex_ai_studio_sdk; print('SDK OK')"
+RUN python -c "from yandex_ai_studio_sdk import AIStudio; print('SDK OK')"
 
 # Рабочие директории
 RUN mkdir -p demo/audio demo/photos /tmp/yamnet_cache
@@ -54,7 +57,7 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 ```
 
 **Base image:** Python 3.11-slim
-**Системные пакеты:** libsndfile (аудио I/O), ffmpeg (конвертация), curl (healthcheck)
+**Системные пакеты:** libsndfile (аудио I/O), ffmpeg (конвертация), curl (healthcheck), texlive + fonts-paratype (PDF-протоколы на LaTeX)
 
 ---
 
@@ -67,8 +70,8 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 | Код | `/var/www/ya_hve` (ветка `main`) |
 | Docker | docker compose v2 (2.34.0) |
 | ОС | Ubuntu 22.04 |
-| RAM | 1.9 GB |
-| Модель | YAMNet v7 загружена и кэширована |
+| RAM | 3.8 GB |
+| Модель | YAMNet v7/v8 загружена и кэширована |
 
 ---
 
@@ -78,7 +81,8 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 
 | Переменная | Описание |
 |------------|---------|
-| `TELEGRAM_BOT_TOKEN` | Токен Telegram-бота (`@ya_faun_bot`) |
+| `TELEGRAM_BOT_TOKEN` | Токен Ranger Bot (`@ya_faun_bot`) |
+| `TELEGRAM_DRONE_BOT_TOKEN` | Токен Drone Bot (приём фото для Vision) |
 | `YANDEX_API_KEY` | API-ключ Yandex Cloud |
 | `YANDEX_FOLDER_ID` | ID каталога Yandex Cloud (`b1g5lqh1mqg84cabtejb`) |
 
@@ -87,7 +91,7 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 | Переменная | Описание |
 |------------|---------|
 | `SEARCH_INDEX_ID` | ID индекса File Search (`fvttk7bjvnm39qogtoep`) |
-| `DATASPHERE_NODE_ID` | ID ноды DataSphere для обучения |
+| `DATASPHERE_NODE_ID` | ID ноды DataSphere для cloud inference |
 
 ### YDB Serverless (опционально)
 
@@ -105,9 +109,14 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 | `CLOUD_API_URL` | `http://cloud:8000` | URL cloud-сервиса для edge |
 | `LORA_GATEWAY_HOST` | `lora_gateway` | Хост LoRa gateway |
 | `LORA_GATEWAY_PORT` | `9000` | Порт LoRa gateway |
-| `MIC_MODE` | `sim` | Режим микрофонов (`sim` / `real`) |
+| `EDGE_CLASSIFY_URL` | `http://edge:8001/api/v1/classify` | URL edge classify API |
+| `MIC_MODE` | `sim` | Режим микрофонов (`sim` / `real` / `real_3`) |
 | `DEMO_SCENARIO` | `chainsaw` | Демо-сценарий |
 | `DISABLE_AUTO_DEMO` | — | Если установлена — отключает auto-demo при старте |
+| `ADMIN_CHAT_IDS` | — | Comma-separated Telegram chat IDs для команды /rangers |
+| `QUIET_HOURS_START` | `22` | Начало тихого времени (МСК) |
+| `QUIET_HOURS_END` | `6` | Конец тихого времени (МСК) |
+| `RAG_SDK_TIMEOUT` | `15` | Timeout для SDK Assistants API (секунды) |
 
 ### Координаты микрофонов (Варнавино, fallback)
 
