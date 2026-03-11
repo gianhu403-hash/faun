@@ -138,6 +138,29 @@ def _point_in_polygon(lat: float, lon: float) -> bool:
     return inside
 
 
+def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Distance in meters between two GPS points."""
+    R = 6_371_000
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    )
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def random_point_in_boundary(max_attempts: int = 100) -> tuple[float, float]:
+    """Generate a random (lat, lon) inside the Varnavino boundary polygon."""
+    for _ in range(max_attempts):
+        lat = random.uniform(LAT_MIN, LAT_MAX)
+        lon = random.uniform(LON_MIN, LON_MAX)
+        if _point_in_polygon(lat, lon):
+            return round(lat, 6), round(lon, 6)
+    return round((LAT_MIN + LAT_MAX) / 2, 6), round((LON_MIN + LON_MAX) / 2, 6)
+
+
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
@@ -397,3 +420,10 @@ else:
         conn.commit()
         conn.close()
         return count
+
+
+def get_nearest_online(lat: float, lon: float, n: int = 3) -> list:
+    """Return the n closest online microphones to (lat, lon)."""
+    online = get_online()
+    online.sort(key=lambda m: _haversine(lat, lon, m.lat, m.lon))
+    return online[:n]
