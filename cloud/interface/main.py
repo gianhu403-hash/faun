@@ -25,22 +25,34 @@ EDGE_CLASSIFY_URL = os.getenv("EDGE_CLASSIFY_URL", "http://edge:8001/api/v1/clas
 
 def _classify_via_edge(audio_path: str) -> AudioResult:
     """Classify audio by calling edge HTTP API instead of importing TF."""
-    try:
-        with open(audio_path, "rb") as f:
-            resp = httpx.post(
-                EDGE_CLASSIFY_URL,
-                files={"file": ("audio.wav", f, "audio/wav")},
-                timeout=30.0,
+    import time
+
+    last_err = None
+    for attempt in range(2):
+        try:
+            with open(audio_path, "rb") as f:
+                resp = httpx.post(
+                    EDGE_CLASSIFY_URL,
+                    files={"file": ("audio.wav", f, "audio/wav")},
+                    timeout=30.0,
+                )
+            data = resp.json()
+            return AudioResult(
+                label=data.get("label", "unknown"),
+                confidence=data.get("confidence", 0.0),
+                raw_scores=data.get("raw_scores", {}),
             )
-        data = resp.json()
-        return AudioResult(
-            label=data.get("label", "unknown"),
-            confidence=data.get("confidence", 0.0),
-            raw_scores=data.get("raw_scores", {}),
-        )
-    except Exception:
-        logger.exception("Edge classify API call failed")
-        return AudioResult(label="unknown", confidence=0.0, raw_scores={})
+        except httpx.ConnectError as e:
+            last_err = e
+            if attempt == 0:
+                logger.warning("Edge not reachable, retrying in 2s...")
+                time.sleep(2)
+                continue
+        except Exception:
+            logger.exception("Edge classify API call failed")
+            return AudioResult(label="unknown", confidence=0.0, raw_scores={})
+    logger.error("Edge classify failed after retry: %s", last_err)
+    return AudioResult(label="unknown", confidence=0.0, raw_scores={})
 
 
 async def _auto_demo():
