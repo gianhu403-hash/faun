@@ -7,10 +7,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from cloud.notify.bot_app import start_bot, stop_bot
 from cloud.notify.drone_bot_app import start_drone_bot, stop_drone_bot
+from cloud.agent.protocol_pdf import generate_protocol
+from cloud.agent.rag_agent import query_legal_articles
+from cloud.db.incidents import get_incident, update_incident
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +68,40 @@ async def generic_exception_handler(request, exc):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/v1/incidents/{incident_id}/protocol.pdf")
+async def protocol_pdf(incident_id: str):
+    incident = get_incident(incident_id)
+    if not incident:
+        return JSONResponse(status_code=404, content={"error": "incident not found"})
+
+    if incident.protocol_pdf:
+        pdf_bytes = incident.protocol_pdf
+    else:
+        # Try RAG for legal articles, fallback to empty string
+        legal_articles = ""
+        try:
+            legal_articles = await asyncio.wait_for(
+                query_legal_articles(incident.audio_class, incident.lat, incident.lon),
+                timeout=10,
+            )
+        except Exception:
+            logger.warning(
+                "RAG failed for incident %s, generating without legal articles",
+                incident_id,
+            )
+
+        pdf_bytes = generate_protocol(incident, legal_articles)
+        update_incident(incident_id, protocol_pdf=pdf_bytes)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="protocol_{incident_id}.pdf"'
+        },
+    )
 
 
 FRONTEND_DIR = Path(__file__).parent
@@ -895,6 +932,7 @@ async def _run_demo(
             ),
         ]
 
+    mic_coords = [(m.lat, m.lon) for m in mic_positions]
     home_lat = mic_positions[0].lat
     home_lon = mic_positions[0].lon
 
