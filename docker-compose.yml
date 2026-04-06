@@ -1,8 +1,12 @@
+name: faun
+
 services:
   cloud:
     build: .
     ports:
-      - "8000:8000"
+      # Loopback only — public access goes through delphi-press nginx
+      # reverse proxy to host port 8002 (8000 is taken by delphi-press-app).
+      - "127.0.0.1:8002:8000"
     env_file:
       - .env
     volumes:
@@ -23,7 +27,8 @@ services:
     build: .
     command: sh -c "python demo/generate_audio.py && python -m edge.server"
     ports:
-      - "8001:8001"
+      # Loopback only — internal use by cloud over the faun_net network.
+      - "127.0.0.1:8003:8001"
     env_file:
       - .env
     volumes:
@@ -35,10 +40,14 @@ services:
     build: .
     command: python -m gateway.relay
     ports:
-      - "9000:9000"
+      - "127.0.0.1:9000:9000"
     env_file:
       - .env
     restart: unless-stopped
 
 volumes:
   yamnet_cache:
+
+networks:
+  default:
+    name: faun_net
