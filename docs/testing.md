@@ -124,7 +124,7 @@ pie title Распределение тестов по компонентам
 ### GitHub Actions
 
 ```yaml
-# workflows/ci.yml
+# .github/workflows/ci.yml
 name: CI
 on:
   push:
