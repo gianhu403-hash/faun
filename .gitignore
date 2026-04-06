@@ -5,6 +5,10 @@ __pycache__/
 *.sqlite
 .env
 
+# macOS
+.DS_Store
+**/.DS_Store
+
 # Security: prevent accidental commit of keys/certs
 *.pem
 *.key
@@ -21,6 +25,9 @@ sa-key.json
 
 # Demo drone photos (downloaded via demo/download_photos.py)
 demo/photos/
+
+# Demo sounds for live classification (downloaded via demo/download_sounds.py)
+demo/sounds/
 
 # MkDocs build output
 site/
