@@ -33,9 +33,13 @@ def _make_test_photo_b64() -> str:
 
 @pytest.fixture(autouse=True)
 def _clean_incidents():
+    from cloud.notify.telegram import _last_sent
+
     clear_all_incidents()
+    _last_sent.clear()
     yield
     clear_all_incidents()
+    _last_sent.clear()
 
 
 # ---------------------------------------------------------------------------
