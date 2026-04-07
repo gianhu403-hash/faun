@@ -9,6 +9,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clean_state():
+    """Clear shared rate-limit state before and after each test."""
+    from cloud.notify.telegram import _last_sent
+
+    _last_sent.clear()
+    yield
+    _last_sent.clear()
+
+
 @pytest.fixture
 def _real_main():
     """Ensure cloud.interface.main is the real module, not a MagicMock."""
