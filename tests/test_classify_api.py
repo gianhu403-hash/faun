@@ -107,11 +107,15 @@ class TestClassifyViaEdge:
 
     def test_classify_via_edge_handles_connection_error(self, _real_main, tmp_path):
         """Edge unavailable → AudioResult(label='unknown', confidence=0)."""
+        import httpx as _httpx
+
         wav_file = tmp_path / "test.wav"
         wav_file.write_bytes(_make_wav_bytes(num_samples=16000))
 
         with patch.object(
-            _real_main, "httpx", **{"post.side_effect": Exception("connection refused")}
+            _real_main.httpx,
+            "post",
+            side_effect=_httpx.ConnectError("connection refused"),
         ):
             result = _real_main._classify_via_edge(str(wav_file))
 
