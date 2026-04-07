@@ -29,18 +29,6 @@
 | DataSphere — обучение YAMNet v7 | `cloud/agent/datasphere_client.py` |
 | DataLens — аналитический дашборд | `cloud/analytics/datalens.py` |
 
-## VPS-сервер
-
-| Параметр | Значение |
-|---|---|
-| IP | `81.85.73.178` |
-| SSH | `ssh root@81.85.73.178` |
-| Код | `/var/www/ya_hve`, ветка `main` |
-| Docker | docker compose v2 (2.34.0) |
-| Сервисы | cloud (:8000), edge, lora_gateway (:9000) |
-| ОС | Ubuntu 22.04, 3.8 GB RAM |
-| Модель | YAMNet v7 загружена и работает |
-
 ## ML Pipeline
 
 - **YAMNet v7**: FEATURE_DIM=2048 (prod-compatible, PCEN/temporal off), leak-free evaluation
@@ -85,3 +73,7 @@
 - Модели (*.keras, *.h5, *.npz) в .gitignore — загружены на VPS
 - Telegram-бот: `@ya_faun_bot`
 - FOLDER_ID: `b1g5lqh1mqg84cabtejb`, SEARCH_INDEX_ID: `fvttk7bjvnm39qogtoep`
+
+## Deploy
+
+Push to main → GHA auto-deploy. Подробный checklist и CSP-конфигурация: [`docs/deployment.md`](docs/deployment.md)

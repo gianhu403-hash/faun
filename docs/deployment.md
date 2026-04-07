@@ -65,13 +65,13 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 
 | Параметр | Значение |
 |----------|---------|
-| IP | `81.85.73.178` |
-| SSH | `ssh root@81.85.73.178` |
-| Код | `/var/www/ya_hve` (ветка `main`) |
-| Docker | docker compose v2 (2.34.0) |
-| ОС | Ubuntu 22.04 |
-| RAM | 3.8 GB |
-| Модель | YAMNet v7/v8 загружена и кэширована |
+| Хост | `213.165.220.144` (shared VPS `delphi-press`) |
+| SSH | `ssh deploy@213.165.220.144` |
+| Код | `~/apps/faun`, ветка `main` |
+| Дашборд | https://faun.antopkin.ru/ |
+| Порты | cloud :8002 (→8000), edge :8003 (→8001), lora_gateway :9000 |
+| ОС | Debian 12, 7.8 GB RAM |
+| Модель | YAMNet v7 загружена и кэширована |
 
 ---
 
@@ -133,29 +133,36 @@ CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000
 ## Команды деплоя
 
 ```bash
-# Первоначальная настройка
-ssh root@81.85.73.178
-cd /var/www/ya_hve
-cp .env.example .env
-nano .env  # заполнить секреты
-
-# Сборка и запуск
-docker compose build
-docker compose up -d
-
-# Проверка состояния
-docker compose ps
-docker compose logs -f cloud
-
-# Обновление
-cd /var/www/ya_hve
-git pull origin main
-docker compose build
-docker compose up -d
-
-# Перезапуск одного сервиса
-docker compose restart cloud
+# Автоматический: push to main → GHA deploy
+# Ручной:
+ssh deploy@213.165.220.144
+cd ~/apps/faun
+git pull && docker compose -p faun up -d --build
 ```
+
+## Post-deploy checklist
+
+1. **Контейнеры пересобрались**: `docker compose -p faun ps` — CREATED свежая
+2. **Health**: `curl -s https://faun.antopkin.ru/health` → `{"status":"ok"}`
+3. **nginx → faun сеть**: `docker network connect faun_net delphi-press-nginx-1` (не персистится!)
+4. **Карта + WebSocket**: https://faun.antopkin.ru/ — карта с микрофонами, статус "OK"
+
+## CSP (Content-Security-Policy)
+
+Faun имеет **отдельный** CSP-файл: `~/apps/delphi-press/nginx/faun-security-headers.conf`.
+Общий `security-headers.conf` — для delphi-press, НЕ трогать.
+
+При добавлении новых внешних ресурсов в frontend — обновить CSP на VPS:
+
+| Директива | Текущие домены | Когда обновлять |
+|-----------|---------------|-----------------|
+| `script-src` | `unpkg.com`, `cdn.jsdelivr.net` | Новый JS CDN |
+| `style-src` | `unpkg.com`, `fonts.googleapis.com`, `cdn.jsdelivr.net` | Новый CSS CDN |
+| `img-src` | `*.basemaps.cartocdn.com` | Смена тайл-провайдера |
+| `connect-src` | `wss://faun.antopkin.ru` | Новые WebSocket/API домены |
+| `frame-src` | `datalens.yandex` | Новые iframe-источники |
+
+После изменения: `docker exec delphi-press-nginx-1 nginx -s reload`
 
 ---
 

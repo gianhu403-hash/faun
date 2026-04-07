@@ -91,10 +91,20 @@ async def lifespan(app):
         await start_drone_bot()
     except Exception:
         logger.exception("Failed to start Drone bot polling")
-    try:
-        await asyncio.to_thread(seed_microphones)
-    except Exception:
-        logger.warning("Failed to seed microphones on startup")
+    for attempt in range(3):
+        try:
+            await asyncio.to_thread(seed_microphones)
+            break
+        except Exception:
+            if attempt < 2:
+                logger.warning(
+                    "Seed microphones attempt %d failed, retrying in 5s...", attempt + 1
+                )
+                await asyncio.sleep(5)
+            else:
+                logger.warning(
+                    "Failed to seed microphones after 3 attempts (data may already exist, use POST /api/v1/mics/reseed)"
+                )
     asyncio.create_task(_auto_demo())
     yield
     await stop_drone_bot()
