@@ -16,6 +16,28 @@ from cloud.notify.telegram import BOT_TOKEN, send_protocol_pdf
 logger = logging.getLogger(__name__)
 
 
+async def _handle_onsite_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Handle text in on-site incident report. Returns True if message was consumed."""
+    chat_id = update.effective_chat.id
+    text = update.message.text
+
+    incident = get_active_incident_for_chat(chat_id)
+    if not incident or incident.status != "on_site":
+        return False
+
+    incident.ranger_report_raw = text
+    update_incident(incident.id, ranger_report_raw=text)
+    await update.message.reply_text("Описание сохранено.")
+
+    if incident.ranger_photo_b64:
+        await _generate_and_send_protocol(chat_id, incident)
+    else:
+        await update.message.reply_text("Отправьте фото нарушения.")
+    return True
+
+
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle voice message — STT and save as ranger report."""
     chat_id = update.effective_chat.id

@@ -111,7 +111,7 @@ class TestConfirmRegEdgeCases:
         update = _make_callback_update(chat_id=3200, data="confirm_reg:yes")
 
         with patch(
-            "cloud.notify.bot_handlers.add_ranger", side_effect=Exception("DB error")
+            "cloud.notify.handlers.registration.add_ranger", side_effect=Exception("DB error")
         ):
             await confirm_reg_callback(update, MagicMock())
 

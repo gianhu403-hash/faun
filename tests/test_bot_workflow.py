@@ -158,7 +158,7 @@ def _fresh_state():
 
 @pytest.fixture
 def mock_bot():
-    with patch("cloud.notify.bot_handlers.BOT_TOKEN", "fake-token"):
+    with patch("cloud.notify.handlers.incident.BOT_TOKEN", "fake-token"):
         with patch("cloud.notify.telegram.BOT_TOKEN", "fake-token"):
             with patch("telegram.Bot") as MockBot:
                 bot_instance = AsyncMock()

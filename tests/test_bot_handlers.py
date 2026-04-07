@@ -483,7 +483,7 @@ class TestRangersCommand:
 
 class TestTextFallback:
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.get_active_incident_for_chat", return_value=None)
+    @patch("cloud.notify.handlers.evidence.get_active_incident_for_chat", return_value=None)
     async def test_unregistered_user_gets_start_hint(self, _mock_incident):
         update = _make_update(chat_id=5000, text="привет")
         await text_handler(update, MagicMock())
@@ -492,7 +492,7 @@ class TestTextFallback:
         assert "/start" in text
 
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.get_active_incident_for_chat", return_value=None)
+    @patch("cloud.notify.handlers.evidence.get_active_incident_for_chat", return_value=None)
     async def test_registered_user_gets_help_hint(self, _mock_incident):
         add_ranger(
             "Фоллбэк Тест",
