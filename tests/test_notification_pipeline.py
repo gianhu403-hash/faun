@@ -78,6 +78,10 @@ def _fresh_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "cloud.notify.telegram.get_recent_nearby_incident", lambda *a, **kw: None
     )
+    yield
+    # Teardown: prevent state leak to subsequent tests
+    _last_sent.clear()
+    clear_all_incidents()
 
 
 def _register_varnavino_ranger(name: str, chat_id: int):
