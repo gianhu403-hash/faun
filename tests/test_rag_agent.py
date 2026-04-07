@@ -166,7 +166,7 @@ async def test_endpoint_timeout_fallback_is_class_aware():
     from cloud.interface.main import app
 
     with patch(
-        "cloud.interface.main.query_rag_enriched",
+        "cloud.interface.routers.rag.query_rag_enriched",
         new_callable=AsyncMock,
         side_effect=asyncio.TimeoutError,
     ):

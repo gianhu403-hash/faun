@@ -70,11 +70,16 @@ def test_stats_endpoint_removed():
 
 def test_datalens_incidents_endpoint_preserved():
     """Endpoint /api/v1/datalens/incidents must still exist."""
-    main_py = (
-        Path(__file__).resolve().parent.parent / "cloud" / "interface" / "main.py"
+    # After router split, this endpoint lives in routers/analytics.py
+    analytics_router = (
+        Path(__file__).resolve().parent.parent
+        / "cloud"
+        / "interface"
+        / "routers"
+        / "analytics.py"
     ).read_text()
-    assert "/api/v1/datalens/incidents" in main_py
-    assert "get_datalens_incidents" in main_py
+    assert "/api/v1/datalens/incidents" in analytics_router
+    assert "get_datalens_incidents" in analytics_router
 
 
 def test_get_datalens_stats_removed():
