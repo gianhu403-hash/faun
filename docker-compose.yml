@@ -2,7 +2,9 @@ name: faun
 
 services:
   cloud:
-    build: .
+    build:
+      context: .
+      dockerfile: cloud/Dockerfile
     ports:
       # Loopback only — public access goes through delphi-press nginx
       # reverse proxy to host port 8002 (8000 is taken by delphi-press-app).
@@ -24,7 +26,9 @@ services:
       start_period: 360s
 
   edge:
-    build: .
+    build:
+      context: .
+      dockerfile: edge/Dockerfile
     command: sh -c "python demo/generate_audio.py && python -m edge.server"
     ports:
       # Loopback only — internal use by cloud over the faun_net network.
@@ -37,7 +41,9 @@ services:
     restart: unless-stopped
 
   lora_gateway:
-    build: .
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
     command: python -m gateway.relay
     ports:
       - "127.0.0.1:9000:9000"
