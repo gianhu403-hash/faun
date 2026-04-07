@@ -93,6 +93,8 @@ def _fresh_state(tmp_path, monkeypatch):
     init_rangers_db()
     init_permits_db()
     _last_sent.clear()
+    yield
+    _last_sent.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════
