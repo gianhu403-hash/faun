@@ -1,5 +1,6 @@
 # Edge service: YAMNet classifier, TDOA triangulation, onset detection
-tensorflow>=2.21,<2.22
+# Use tensorflow-cpu to skip CUDA libs (~1 GB savings)
+tensorflow-cpu>=2.21,<2.22
 tensorflow-hub>=0.16,<0.17
 numpy>=2.4,<2.5
 scipy>=1.17,<2.0
@@ -7,6 +8,7 @@ soundfile>=0.12,<1.0
 sounddevice>=0.4,<1.0
 librosa>=0.10,<1.0
 fastapi>=0.104,<1.0
+python-multipart>=0.0.6,<1.0
 uvicorn>=0.24,<1.0
 httpx>=0.25,<1.0
 python-dotenv>=1.0,<2.0

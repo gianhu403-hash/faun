@@ -27,3 +27,6 @@ jobs:
             git pull origin main
             docker compose -p faun up -d --build
             docker compose -p faun ps
+            # Cleanup: remove dangling images and build cache older than 24h
+            docker image prune -f
+            docker builder prune -f --filter until=24h
