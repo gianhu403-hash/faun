@@ -237,23 +237,6 @@ async def start_demo_v1(req: DemoRequest):
     return DemoResponse(status="started", scenario=req.scenario)
 
 
-# TODO: Future REST endpoints for React/Flutter frontend:
-#
-# GET  /api/v1/status          — current system status (mics, drone, alerts)
-# GET  /api/v1/alerts          — list of past alerts with pagination
-# GET  /api/v1/alerts/{id}     — single alert detail
-# POST /api/v1/drone/dispatch  — manually dispatch drone to coordinates
-# GET  /api/v1/drone/position  — current drone GPS position
-# GET  /api/v1/mics            — list of mic positions and their status
-# WS   /ws                     — real-time event stream (keep as-is)
-#
-# When building React/Flutter:
-# 1. Use /api/v1/* endpoints for CRUD operations
-# 2. Use /ws WebSocket for real-time map updates
-# 3. Authentication: add OAuth2/JWT middleware to FastAPI
-#    See: https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/
-
-
 # Rangers API — moved to cloud/interface/routers/rangers.py
 
 

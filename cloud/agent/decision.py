@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
-# TODO: Yandex Foundation Models completions API
+# Yandex Foundation Models completions API
 # Docs: https://yandex.cloud/docs/foundation-models/
 API_URL = os.getenv(
     "YANDEX_GPT_URL",
