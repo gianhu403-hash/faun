@@ -58,7 +58,7 @@ class TestSnoozeResend:
     """Test _snooze_resend job callback."""
 
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.send_pending_to_chat", new_callable=AsyncMock)
+    @patch("cloud.notify.handlers.incident.send_pending_to_chat", new_callable=AsyncMock)
     async def test_snooze_resend_sends_for_pending(self, mock_send):
         incident = create_incident("chainsaw", 57.3, 44.8, 0.85, "alert")
         ctx = MagicMock()
@@ -78,7 +78,7 @@ class TestSnoozeResend:
         )
 
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.send_pending_to_chat", new_callable=AsyncMock)
+    @patch("cloud.notify.handlers.incident.send_pending_to_chat", new_callable=AsyncMock)
     async def test_snooze_resend_skips_accepted(self, mock_send):
         incident = create_incident("chainsaw", 57.3, 44.8, 0.85, "alert")
         update_incident(
@@ -96,7 +96,7 @@ class TestSnoozeResend:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.send_pending_to_chat", new_callable=AsyncMock)
+    @patch("cloud.notify.handlers.incident.send_pending_to_chat", new_callable=AsyncMock)
     async def test_snooze_resend_skips_nonexistent(self, mock_send):
         ctx = MagicMock()
         ctx.job.data = {"chat_id": 100, "incident_id": "nonexistent-id"}
@@ -106,7 +106,7 @@ class TestSnoozeResend:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
-    @patch("cloud.notify.bot_handlers.send_pending_to_chat", new_callable=AsyncMock)
+    @patch("cloud.notify.handlers.incident.send_pending_to_chat", new_callable=AsyncMock)
     async def test_snooze_resend_preserves_is_demo(self, mock_send):
         incident = create_incident("gunshot", 57.3, 44.8, 0.90, "alert", is_demo=True)
         ctx = MagicMock()

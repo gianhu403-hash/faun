@@ -216,7 +216,7 @@ class TestAcceptAndErrorPaths:
 
         with patch("telegram.Bot", return_value=mock_bot):
             with patch(
-                "cloud.notify.bot_handlers.send_drone_photo", new_callable=AsyncMock
+                "cloud.notify.handlers.incident.send_drone_photo", new_callable=AsyncMock
             ):
                 await accept_callback(update, ctx)
 
