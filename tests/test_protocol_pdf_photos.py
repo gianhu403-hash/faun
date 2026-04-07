@@ -112,7 +112,7 @@ class TestPhotoPersistence:
         mock_update.message.caption = None
 
         with patch(
-            "cloud.notify.bot_handlers.update_incident",
+            "cloud.notify.handlers.evidence.update_incident",
             wraps=update_incident,
         ) as spy:
             await handle_inspector_photo(mock_update, MagicMock())
