@@ -1,0 +1,7 @@
+# Gateway service: LoRa mesh relay, event forwarding
+httpx>=0.25,<1.0
+python-telegram-bot[job-queue]>=22.0,<23.0
+python-dotenv>=1.0,<2.0
+pydantic>=2.5,<3.0
+yandex-ai-studio-sdk>=0.3,<1.0
+ydb>=3.0,<4.0
