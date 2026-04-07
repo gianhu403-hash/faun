@@ -1,0 +1,29 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# ML models (loaded via scp, not in image)
+*.keras
+*.h5
+*.npz
+
+# Tests & docs (not needed in production image)
+tests/
+docs/
+graphs/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Environment
+.env
+.env.*
