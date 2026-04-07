@@ -19,7 +19,6 @@ Message handlers:
 
 import base64
 import logging
-import math
 import os
 import random
 import time
@@ -58,35 +57,18 @@ from cloud.notify.telegram import (
     CLASS_NAME_RU,
     BOT_TOKEN,
 )
+from cloud.notify.handlers._shared import (
+    ADMIN_CHAT_IDS,
+    _registration_state,
+    _REG_STEP_NAME,
+    _REG_STEP_BADGE,
+    _REG_STEP_CONFIRM,
+    _REG_TTL,
+    _haversine,
+    _safe_answer,
+)
 
 logger = logging.getLogger(__name__)
-
-# Admin chat IDs (comma-separated env var)
-ADMIN_CHAT_IDS: set[int] = set()
-_admin_env = os.getenv("ADMIN_CHAT_IDS", "")
-if _admin_env:
-    ADMIN_CHAT_IDS = {int(x.strip()) for x in _admin_env.split(",") if x.strip()}
-
-# ---------- Registration state (manual, no ConversationHandler) ----------
-
-_registration_state: dict[int, dict] = {}
-_REG_STEP_NAME = "awaiting_name"
-_REG_STEP_BADGE = "awaiting_badge"
-_REG_STEP_CONFIRM = "awaiting_confirm"
-_REG_TTL = 1800  # 30 minutes
-
-
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distance in meters between two GPS points."""
-    R = 6_371_000  # Earth radius in meters
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlam = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dphi / 2) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
-    )
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 # ---------- /start, /status, /stop ----------
@@ -118,14 +100,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Добро пожаловать в ForestGuard!\n\nВыберите ваше лесничество:",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-
-
-async def _safe_answer(query) -> None:
-    """answer() just removes the loading spinner — non-critical."""
-    try:
-        await query.answer()
-    except Exception:
-        pass
 
 
 async def district_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
