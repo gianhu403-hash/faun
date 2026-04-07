@@ -74,7 +74,9 @@ PRIORITY_LABEL: dict[str, str] = {
 
 def _is_rate_limited(chat_id: int, gating_level: str = "verify") -> bool:
     """Check if this chat_id was alerted recently (severity-aware)."""
-    last = _last_sent.get(chat_id, 0.0)
+    if chat_id not in _last_sent:
+        return False
+    last = _last_sent[chat_id]
     cooldown = SEVERITY_COOLDOWNS.get(gating_level, COOLDOWN_SECONDS)
     return (time.monotonic() - last) < cooldown
 
