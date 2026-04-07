@@ -4,9 +4,22 @@ Safety net for the main.py → routers split refactoring.
 Checks route registration, NOT business logic.
 """
 
+import sys
+
 import pytest
 
-from cloud.interface.main import app
+
+def _get_real_app():
+    """Get the real FastAPI app, even if other tests mocked the module."""
+    mod_name = "cloud.interface.main"
+    cached = sys.modules.get(mod_name)
+    if cached is None or not hasattr(cached, "__file__"):
+        sys.modules.pop(mod_name, None)
+        import cloud.interface.main  # noqa: F811
+    return sys.modules[mod_name].app
+
+
+app = _get_real_app()
 
 
 # Every route in main.py as of pre-split baseline
