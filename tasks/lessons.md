@@ -77,3 +77,28 @@ edge уже держит свой экземпляр TF. На VPS с 1.9 GB RAM 
 `python -c "import urllib.request; ..."` запускает полный Python-интерпретатор
 (~40 MB) для каждой проверки. На VPS с ограниченной RAM это усиливает memory
 pressure во время загрузки TF. `curl -sf url` использует ~5 MB и работает мгновенно.
+
+## 11. Split requirements → латентные ImportError в ленивых импортах
+
+После split `requirements.txt` на `requirements-cloud.txt` / `requirements-edge.txt`
+(коммиты `20839d9` + `3db3adf`, 2026-04-07) из cloud-контейнера ушли `tensorflow`,
+`scipy`, `librosa`. Классификация была переведена на HTTP через `_classify_via_edge()`,
+но `cloud/interface/main.py::_import_demo_deps()` продолжал напрямую импортировать
+`edge.tdoa.triangulate` — а он тянет `scipy` на module-level. Контейнер стартовал
+нормально (верхние импорты `main.py` scipy не трогают), но при клике «Бензопила» в
+дашборде ленивый import падал → `except Exception` → фронту уходило `reason: "import_error"`.
+
+Баг жил ~2 суток незамеченным: auto-demo отключён на VPS через `DISABLE_AUTO_DEMO=1`
+(см. урок №9), а тесты мокают `_import_demo_deps()` целиком, поэтому реальная dep-цепочка
+не проверялась.
+
+**Правила:**
+- При split deps делать `grep -r "from edge\." cloud/` и проверять каждый импорт на
+  транзитивные тяжёлые зависимости (scipy, tensorflow, librosa, sounddevice).
+- Для ленивых импортов, которые ловятся через `except Exception`, — логировать **имя
+  конкретного модуля**, который упал, а не просто `"import_error"`. Сейчас это скрыто
+  в `logger.exception`, но наружу в WebSocket уходит только generic строка.
+- Rule of thumb: если cloud больше не содержит TF, он и не должен содержать модули,
+  чей транзитив тянет TF/scipy. Либо переносить в edge+HTTP (как classifier), либо
+  добавлять dep обратно с осознанной причиной (triangulate → scipy — гео-вычисление
+  имеет смысл на cloud-стороне для симуляции, оставляем scipy).

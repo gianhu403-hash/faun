@@ -62,6 +62,7 @@
 - ~~`test_classify_api.py::test_classify_via_edge_handles_connection_error`~~ → **Сделано** — патчим `httpx.post`, не весь модуль
 - **`test_drone_bot.py` и `test_bot_workflow.py`** заменяют `sys.modules["cloud.interface.main"]` на MagicMock на уровне модуля — обходим через `_get_real_app()` в новых тестах
 - **Demo pipeline** (`_run_demo`) — 250+ LOC в main.py, сильно переплетён с `broadcast()`. Следующий кандидат на вынос
+- **`_run_demo` отдаёт обобщённый `import_error`** — сейчас `except Exception` на `main.py:400` броадкастит `reason: "import_error"` без указания конкретного модуля. Лучше пробрасывать `type(e).__name__ + ": " + str(e)` (уже попадает в `logger.exception`, но не в WebSocket). Было бы поймано раньше при scipy-регрессии 2026-04-09
 - **Edge image 3.58 GB** — TF 2.21 (`tensorflow` package = `tensorflow-cpu` в 2.16+). Можно сэкономить ~300 MB удалив librosa (используется только для PCEN в v8 модели)
 - **Auto-cleanup в deploy.yml** — `docker image prune -f && docker builder prune -f --filter until=24h` после каждого деплоя
 - **CSP nginx** — Faun использует отдельный `faun-security-headers.conf` с whitelist для unpkg.com, basemaps.cartocdn.com, datalens.yandex, wss://faun.antopkin.ru
