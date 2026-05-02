@@ -27,6 +27,13 @@ jobs:
             git pull origin main
             docker compose -p faun up -d --build
             docker compose -p faun ps
-            # Cleanup: remove dangling images and build cache older than 24h
+            # Cleanup — shared VPS, не трогаем соседей
             docker image prune -f
             docker builder prune -f --filter until=24h
+            docker container prune -f --filter "label=com.docker.compose.project=faun" --filter "until=24h"
+            # Keep last 3 builds per faun-* image (currently 3 services, this is preventive)
+            docker images "faun-*" --format '{{.ID}} {{.CreatedAt}}' | sort -k2 | head -n -3 | awk '{print $1}' | xargs -r docker rmi 2>/dev/null || true
+            # Snapshot for trend monitoring — visible at end of this step's deploy log
+            echo
+            echo "=== Post-deploy docker system df ==="
+            docker system df

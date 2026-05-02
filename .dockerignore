@@ -19,6 +19,24 @@ tests/
 docs/
 graphs/
 
+# Demo data — runtime, not needed in image (provided via bind-mount in compose)
+demo/
+
+# Local-only tooling
+simulator/
+tasks/
+site/
+*.pdf
+requirements.lock
+mkdocs.yml
+cleanup.sh
+demo.sh
+generate_presentation_graphs.py
+
+# Claude / MCP metadata
+.claude/
+.mcp.json
+
 # IDE / OS
 .vscode/
 .idea/

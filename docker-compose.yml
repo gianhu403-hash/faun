@@ -24,6 +24,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 360s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   edge:
     build:
@@ -39,6 +44,11 @@ services:
       - .:/app
       - yamnet_cache:/tmp/yamnet_cache
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   lora_gateway:
     build:
@@ -50,6 +60,11 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   yamnet_cache:
