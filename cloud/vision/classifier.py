@@ -154,14 +154,16 @@ async def _try_yandexgpt_vision(
 
 
 def _stub_result() -> VisionResult:
-    """Conservative fallback: flag as potential threat so pipeline continues."""
+    """Safe fallback: no false-positive threat. Vision unavailability is signalled
+    via the description text — downstream alert composition is unaffected (acoustic
+    detection still drives priority; visual evidence simply doesn't exist)."""
     return VisionResult(
         description="Визуальный анализ недоступен. Требуется ручная проверка.",
         has_human=False,
         has_fire=False,
-        has_felling=True,
+        has_felling=False,
         has_machinery=False,
-        is_threat=True,
+        is_threat=False,
         time_of_day="",
         people_count=0,
         equipment_types=[],

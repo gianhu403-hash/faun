@@ -1,10 +1,9 @@
 """Workflow orchestration API router."""
 
-import asyncio
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from cloud.interface._tasks import safe_task
 from cloud.interface.security import require_api_key
 from cloud.workflows.pipeline import get_pipeline_definition
 from cloud.workflows.yandex_workflows import register_workflow, run_workflow
@@ -35,5 +34,5 @@ async def workflow_run(req: WorkflowRunRequest):
     reg = await register_workflow()
     result = await run_workflow(reg["workflow_id"], {"scenario": req.scenario})
     run_demo = _get_run_demo()
-    asyncio.create_task(run_demo(req.scenario))
+    safe_task(run_demo(req.scenario), name=f"workflow_demo:{req.scenario}")
     return result

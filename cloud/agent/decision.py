@@ -83,11 +83,15 @@ async def compose_alert(
 
 Напиши алерт егерю.
 """
-    text = await _call_yandex(prompt)
+    text, fallback_reason = await _call_yandex(prompt)
+    if fallback_reason is not None:
+        priority = "DEGRADED"
+        text = f"[fallback: AI недоступен] {text}"
+        logger.warning("METRIC alert_fallback_total reason=%s", fallback_reason)
     return Alert(text=text, priority=priority, lat=lat, lon=lon)
 
 
-async def _call_yandex(user_prompt: str) -> str:
+async def _call_yandex(user_prompt: str) -> tuple[str, str | None]:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -107,7 +111,28 @@ async def _call_yandex(user_prompt: str) -> str:
                 },
             )
         resp.raise_for_status()
-        return resp.json()["result"]["alternatives"][0]["message"]["text"]
+        return resp.json()["result"]["alternatives"][0]["message"]["text"], None
+    except httpx.TimeoutException:
+        logger.exception("YandexGPT call failed")
+        return (
+            "Обнаружено нарушение. Требуется проверка инспектором на месте.",
+            "timeout",
+        )
+    except httpx.HTTPStatusError as e:
+        logger.exception("YandexGPT call failed")
+        return (
+            "Обнаружено нарушение. Требуется проверка инспектором на месте.",
+            f"http_{e.response.status_code}",
+        )
+    except (KeyError, IndexError, ValueError):
+        logger.exception("YandexGPT call failed")
+        return (
+            "Обнаружено нарушение. Требуется проверка инспектором на месте.",
+            "bad_response",
+        )
     except Exception:
         logger.exception("YandexGPT call failed")
-        return "Обнаружено нарушение. Требуется проверка инспектором на месте."
+        return (
+            "Обнаружено нарушение. Требуется проверка инспектором на месте.",
+            "exception",
+        )
