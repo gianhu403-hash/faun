@@ -7,6 +7,7 @@ it is transient by nature (cleared when a ranger finishes workflow).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -36,6 +37,11 @@ _YDB_PERSISTABLE = frozenset(
         "is_demo",
         "created_at",
         "protocol_pdf",
+        # FAUN-38a B2: persist drone evidence + alert tracking across restarts
+        "drone_photo_b64",
+        "drone_comment",
+        "ranger_photo_b64",
+        "alert_message_ids",
     }
 )
 
@@ -54,6 +60,11 @@ _FIELD_TYPES: dict[str, str] = {
     "is_demo": "Bool",
     "created_at": "Double",
     "protocol_pdf": "String",
+    # FAUN-38a B2: drone evidence + alert tracking
+    "drone_photo_b64": "String",  # raw PNG bytes -> YDB String (binary)
+    "drone_comment": "Utf8",
+    "ranger_photo_b64": "String",
+    "alert_message_ids": "Utf8",  # JSON-serialised dict[chat_id]=msg_id
 }
 
 
@@ -171,6 +182,16 @@ class YDBIncidentRepository(IncidentRepository):
         if not fields:
             return
 
+        # FAUN-38a B2: log non-persistable fields so silent drops are auditable.
+        # Logged before state-machine validation so the warning fires on the
+        # caller's intent, not on whether the incident currently exists.
+        unknown = set(fields) - _YDB_PERSISTABLE
+        if unknown:
+            logger.warning(
+                "update_incident dropping non-persistable fields: %s",
+                sorted(unknown),
+            )
+
         # State machine validation: check current status first if changing status
         new_status = fields.get("status")
         if new_status:
@@ -198,6 +219,20 @@ class YDBIncidentRepository(IncidentRepository):
             ydb_type = _FIELD_TYPES.get(field_name, "Utf8")
             set_clauses.append(f"{field_name} = {param_name}")
             declares.append(f"DECLARE {param_name} AS {ydb_type};")
+
+            # FAUN-38a B2: alert_message_ids is dict in code, JSON in YDB.
+            # Reject non-dict (None, list, etc) explicitly — silent coercion to
+            # "" would be indistinguishable from "no alerts ever sent".
+            if field_name == "alert_message_ids":
+                if value is None:
+                    value = "{}"  # explicit empty map, distinguishable from broken
+                elif isinstance(value, dict):
+                    value = json.dumps({str(k): v for k, v in value.items()})
+                else:
+                    raise TypeError(
+                        f"alert_message_ids must be dict or None, got {type(value).__name__}"
+                    )
+
             # Convert None to appropriate zero value for YDB
             if value is None:
                 if ydb_type == "Double":
@@ -267,6 +302,96 @@ class YDBIncidentRepository(IncidentRepository):
             return None
         return self.get_incident(incident_id)
 
+    def get_stale_incidents(
+        self,
+        pending_max_age: float = 1800,
+        accepted_max_age: float = 3600,
+    ) -> list[Incident]:
+        """Find stale incidents: pending older than pending_max_age,
+        accepted older than accepted_max_age. Mirrors in-memory semantics
+        in cloud/db/incidents.py:168-181 -- same return type and field semantics.
+
+        SQL pre-filters at YDB level for efficiency; the final age check is
+        re-done in Python so semantics are identical to the in-memory backend
+        regardless of how the row set was obtained.
+        """
+        from cloud.db.ydb_client import execute_query, get_pool
+
+        pool = get_pool()
+        now = time.time()
+        pending_cutoff = now - pending_max_age
+        accepted_cutoff = now - accepted_max_age
+
+        def _q(session):
+            result = execute_query(
+                session,
+                """
+                DECLARE $pending_cutoff AS Double;
+                DECLARE $accepted_cutoff AS Double;
+                SELECT * FROM incidents
+                WHERE (status = 'pending' AND created_at < $pending_cutoff)
+                   OR (status = 'accepted' AND accepted_at IS NOT NULL
+                       AND accepted_at < $accepted_cutoff)
+                """,
+                {
+                    "$pending_cutoff": pending_cutoff,
+                    "$accepted_cutoff": accepted_cutoff,
+                },
+            )
+            stale: list[Incident] = []
+            for row in result[0].rows:
+                if row.status == "pending":
+                    if now - row.created_at > pending_max_age:
+                        stale.append(self._row_to_incident(row))
+                elif row.status == "accepted" and row.accepted_at:
+                    if now - row.accepted_at > accepted_max_age:
+                        stale.append(self._row_to_incident(row))
+            return stale
+
+        return pool.retry_operation_sync(_q)
+
+    def get_recent_nearby_incident(
+        self,
+        lat: float,
+        lon: float,
+        radius_m: float = 500,
+        max_age_s: float = 300,
+    ) -> Incident | None:
+        """Find a recent pending/accepted incident near (lat, lon).
+        Mirrors cloud/db/incidents.py:184-198 -- YDB has no geospatial
+        functions, so SQL pre-filters status+age and Python re-checks
+        status/age + does the haversine. Re-checking matches in-memory
+        semantics exactly.
+        """
+        from cloud.db.rangers import _haversine
+        from cloud.db.ydb_client import execute_query, get_pool
+
+        pool = get_pool()
+        now = time.time()
+        cutoff = now - max_age_s
+
+        def _q(session):
+            result = execute_query(
+                session,
+                """
+                DECLARE $cutoff AS Double;
+                SELECT * FROM incidents
+                WHERE status IN ('pending', 'accepted')
+                  AND created_at > $cutoff
+                """,
+                {"$cutoff": cutoff},
+            )
+            for row in result[0].rows:
+                if row.status not in ("pending", "accepted"):
+                    continue
+                if now - row.created_at > max_age_s:
+                    continue
+                if _haversine(lat, lon, row.lat, row.lon) <= radius_m:
+                    return self._row_to_incident(row)
+            return None
+
+        return pool.retry_operation_sync(_q)
+
     # ------------------------------------------------------------------
     # chat mapping (in-memory, transient)
     # ------------------------------------------------------------------
@@ -283,7 +408,29 @@ class YDBIncidentRepository(IncidentRepository):
 
     @staticmethod
     def _row_to_incident(row) -> Incident:
-        """Convert a YDB result row to an Incident dataclass."""
+        """Convert a YDB result row to an Incident dataclass.
+
+        FAUN-38a B2: read back drone_photo_b64, drone_comment, ranger_photo_b64,
+        alert_message_ids — they are now persisted by update_incident, so the
+        read side must surface them too (otherwise write/read asymmetry causes
+        silent data loss after restart).
+        """
+        raw_alert_ids = getattr(row, "alert_message_ids", None) or ""
+        if raw_alert_ids:
+            try:
+                alert_message_ids = {
+                    int(k): v for k, v in json.loads(raw_alert_ids).items()
+                }
+            except (ValueError, json.JSONDecodeError):
+                logger.warning(
+                    "alert_message_ids JSON decode failed for incident %s: %r",
+                    getattr(row, "id", "?"),
+                    raw_alert_ids,
+                )
+                alert_message_ids = {}
+        else:
+            alert_message_ids = {}
+
         return Incident(
             id=row.id,
             audio_class=row.audio_class,
@@ -305,4 +452,8 @@ class YDBIncidentRepository(IncidentRepository):
             ranger_report_legal=getattr(row, "ranger_report_legal", None) or None,
             resolution_details=getattr(row, "resolution_details", "") or "",
             is_demo=getattr(row, "is_demo", False) or False,
+            drone_photo_b64=getattr(row, "drone_photo_b64", None) or None,
+            drone_comment=getattr(row, "drone_comment", None) or None,
+            ranger_photo_b64=getattr(row, "ranger_photo_b64", None) or None,
+            alert_message_ids=alert_message_ids,
         )
