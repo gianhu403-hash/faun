@@ -18,6 +18,7 @@ from cloud.interface.routers.workflows import router as workflows_router
 from cloud.interface.routers.analytics import router as analytics_router
 from cloud.interface.routers.classification import router as classification_router
 from cloud.interface.routers.rag import router as rag_router
+from cloud.interface._tasks import safe_task
 from cloud.notify.bot_app import start_bot, stop_bot
 from cloud.notify.drone_bot_app import start_drone_bot, stop_drone_bot
 from cloud.agent.protocol_pdf import generate_protocol
@@ -106,7 +107,7 @@ async def lifespan(app):
                 logger.warning(
                     "Failed to seed microphones after 3 attempts (data may already exist, use POST /api/v1/mics/reseed)"
                 )
-    asyncio.create_task(_auto_demo())
+    safe_task(_auto_demo(), name="auto_demo")
     yield
     await stop_drone_bot()
     await stop_bot()
@@ -236,8 +237,9 @@ class DemoResponse(BaseModel):
 )
 async def start_demo_v1(req: DemoRequest):
     """Start a demo scenario. Optionally specify source coordinates."""
-    asyncio.create_task(
-        _run_demo(req.scenario, source_lat=req.source_lat, source_lon=req.source_lon)
+    safe_task(
+        _run_demo(req.scenario, source_lat=req.source_lat, source_lon=req.source_lon),
+        name=f"demo:{req.scenario}",
     )
     return DemoResponse(status="started", scenario=req.scenario)
 
@@ -278,10 +280,11 @@ async def dispatch_drone(incident_id: str):
     if not incident:
         return JSONResponse(status_code=404, content={"error": "incident not found"})
 
-    asyncio.create_task(
+    safe_task(
         _run_drone_for_incident(
             incident_id, incident.lat, incident.lon, incident.audio_class
-        )
+        ),
+        name=f"drone_dispatch:{incident_id}",
     )
     return {"status": "dispatched", "incident_id": incident_id}
 
@@ -339,7 +342,7 @@ async def _run_drone_for_incident(
 
 @app.post("/demo/start", dependencies=[Depends(require_api_key)])
 async def start_demo_legacy(scenario: str = "chainsaw"):
-    asyncio.create_task(_run_demo(scenario))
+    safe_task(_run_demo(scenario), name=f"demo_legacy:{scenario}")
     return {"status": "started", "scenario": scenario}
 
 

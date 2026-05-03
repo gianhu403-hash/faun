@@ -69,6 +69,7 @@ PRIORITY_LABEL: dict[str, str] = {
     "ВЫСОКИЙ": "Приоритет: ВЫСОКИЙ",
     "СРЕДНИЙ": "Приоритет: СРЕДНИЙ",
     "НИЗКИЙ": "Приоритет: НИЗКИЙ",
+    "DEGRADED": "Приоритет: СНИЖЕННЫЙ (AI недоступен)",
 }
 
 
@@ -231,7 +232,6 @@ async def send_pending(
         if _is_rate_limited(chat_id, level):
             logger.info("Rate-limited: skipping pending alert for chat_id=%s", chat_id)
             continue
-        _mark_sent(chat_id)
         try:
             msg = await bot.send_message(
                 chat_id=chat_id,
@@ -240,6 +240,7 @@ async def send_pending(
                 reply_markup=keyboard,
                 disable_web_page_preview=True,
             )
+            _mark_sent(chat_id)
             incident.alert_message_ids[chat_id] = msg.message_id
         except Exception as e:
             logger.error("Failed to send pending alert to %s: %s", chat_id, e)
@@ -389,7 +390,6 @@ async def send_confirmed(
                 "Rate-limited: skipping confirmed alert for chat_id=%s", chat_id
             )
             continue
-        _mark_sent(chat_id)
         try:
             if photo_bytes:
                 await bot.send_photo(
@@ -407,6 +407,7 @@ async def send_confirmed(
                     reply_markup=keyboard,
                     disable_web_page_preview=True,
                 )
+            _mark_sent(chat_id)
         except Exception as e:
             logger.error("Failed to send confirmed alert to %s: %s", chat_id, e)
 

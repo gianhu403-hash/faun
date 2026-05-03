@@ -82,11 +82,11 @@ class TestParseResult:
         assert result.is_threat is True
 
     def test_parse_result_malformed_json_returns_stub(self):
-        """Malformed JSON returns conservative stub with is_threat=True."""
+        """Malformed JSON returns safe stub: no false-positive threat."""
         result = _parse_result("this is not json at all {{{")
         assert isinstance(result, VisionResult)
-        assert result.is_threat is True
-        assert result.has_felling is True
+        assert result.is_threat is False
+        assert result.has_felling is False
         assert result.description != ""
 
     def test_parse_result_human_with_gun_forces_threat(self):
