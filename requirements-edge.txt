@@ -2,6 +2,10 @@
 # Use tensorflow-cpu to skip CUDA libs (~1 GB savings)
 tensorflow-cpu>=2.21,<2.22
 tensorflow-hub>=0.16,<0.17
+# CVE-2026-1669 (Keras LFD via .h5 external storage) — fix in 3.13.2; we load only
+# our own yamnet_forest_classifier_v7.keras so trigger is unreachable, but the pin
+# is cheap and forward-protects against a supply-chain compromise of model files.
+keras>=3.13.2,<4.0
 numpy>=2.4,<2.5
 scipy>=1.17,<2.0
 soundfile>=0.12,<1.0
