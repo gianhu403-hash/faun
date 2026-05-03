@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import secrets
 import sys
 from unittest.mock import AsyncMock, patch
 
@@ -49,15 +50,27 @@ def _fresh_incidents():
     _incidents.clear()
 
 
+# Generated per pytest invocation — keeps test_no_hardcoded_secrets_in_tracked_files
+# (FAUN-33 posture gate) green by avoiding any literal that pattern-matches as a key.
+_TEST_KEY = secrets.token_hex(16)
+
+
+@pytest.fixture(autouse=True)
+def _faun_api_key(monkeypatch):
+    """protocol.pdf endpoint requires X-API-Key after FAUN-37b/B (legal docs)."""
+    monkeypatch.setenv("FAUN_API_KEY", _TEST_KEY)
+
+
 @pytest.fixture
-def client(_fresh_incidents):
-    """httpx AsyncClient bound to the FastAPI app."""
+def client(_fresh_incidents, _faun_api_key):
+    """httpx AsyncClient bound to the FastAPI app, pre-authed."""
     import httpx
 
     main_mod = _get_real_main()
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=main_mod.app),
         base_url="http://test",
+        headers={"X-API-Key": _TEST_KEY},
     )
 
 

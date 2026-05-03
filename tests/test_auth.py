@@ -252,15 +252,140 @@ def test_origin_bypass_rejects_origin_null(
 
 
 # ---------------------------------------------------------------------------
-# 6. Public GET routes stay open even when FAUN_API_KEY is set
+# 6. Read-side PII endpoints — must require X-API-Key (FAUN-37b/B)
 # ---------------------------------------------------------------------------
 
 
+# 5 GET endpoints whose payloads contain PII or strategic data.
+# Frontend (cloud/interface/index.html) does NOT call any of these — verified by grep.
+READ_PROTECTED_GET_ROUTES = [
+    "/api/v1/rangers",  # PII: name + Telegram chat_id
+    "/api/v1/incidents/export",  # entire incidents DB as CSV
+    "/api/v1/datalens/incidents",  # entire incidents DB as JSON
+    "/api/v1/fgis-lk/permits?lat=57&lon=44",  # contractor names + felling volumes
+    "/api/v1/incidents/1/protocol.pdf",  # legal documents (incident_id=1)
+]
+
+
+@pytest.mark.parametrize(
+    "path", READ_PROTECTED_GET_ROUTES, ids=READ_PROTECTED_GET_ROUTES
+)
+def test_read_protected_route_requires_api_key_when_unset(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("FAUN_API_KEY", raising=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get(path).status_code == 503, f"GET {path}: expected 503"
+
+
+@pytest.mark.parametrize(
+    "path", READ_PROTECTED_GET_ROUTES, ids=READ_PROTECTED_GET_ROUTES
+)
+def test_read_protected_route_rejects_missing_api_key(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    client = TestClient(app, raise_server_exceptions=False)
+    assert client.get(path).status_code == 403, f"GET {path}: expected 403 (no key)"
+
+
+@pytest.mark.parametrize(
+    "path", READ_PROTECTED_GET_ROUTES, ids=READ_PROTECTED_GET_ROUTES
+)
+def test_read_protected_route_rejects_wrong_api_key(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get(path, headers={"X-API-Key": "wrong"})
+    assert resp.status_code == 403, f"GET {path}: expected 403 (wrong key)"
+
+
+@pytest.mark.parametrize(
+    "path", READ_PROTECTED_GET_ROUTES, ids=READ_PROTECTED_GET_ROUTES
+)
+def test_read_protected_route_accepts_correct_api_key(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get(path, headers={"X-API-Key": "test_key_123"})
+    assert resp.status_code not in (401, 403, 503), (
+        f"GET {path}: correct key rejected with {resp.status_code}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. /api/v1/mics: public-safe redaction unless authed (FAUN-37b/B)
+# ---------------------------------------------------------------------------
+
+
+# Telemetry fields that must NOT appear for unauthenticated callers.
+# Combined they form a "where won't they hear me" map for poachers.
+SENSITIVE_MIC_FIELDS = {"battery_pct", "installed_at", "sub_district", "status"}
+
+
+def test_mics_redacted_when_unauth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    client = TestClient(app, raise_server_exceptions=False)
+    body = client.get("/api/v1/mics").json()
+    assert body, "expected at least one mic in seed data"
+    for mic in body:
+        leaked = SENSITIVE_MIC_FIELDS & set(mic.keys())
+        assert not leaked, f"sensitive fields leaked to unauth caller: {leaked}"
+        assert "online" in mic, "public payload must include online boolean"
+        assert {"mic_uid", "lat", "lon", "zone_type"} <= set(mic.keys())
+
+
+def test_mics_full_payload_when_authed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    client = TestClient(app, raise_server_exceptions=False)
+    body = client.get("/api/v1/mics", headers={"X-API-Key": "test_key_123"}).json()
+    assert body, "expected at least one mic in seed data"
+    for mic in body:
+        assert SENSITIVE_MIC_FIELDS <= set(mic.keys()), (
+            f"authed payload missing fields: {SENSITIVE_MIC_FIELDS - set(mic.keys())}"
+        )
+
+
+def test_mics_full_payload_via_same_origin_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frontend dashboard (same-origin) must see full telemetry — that is its UX."""
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    monkeypatch.setenv("FAUN_FRONTEND_ORIGINS", "https://faun.antopkin.ru")
+    client = TestClient(app, raise_server_exceptions=False)
+    body = client.get("/api/v1/mics", headers=SAME_ORIGIN_HEADERS).json()
+    assert body
+    for mic in body:
+        assert SENSITIVE_MIC_FIELDS <= set(mic.keys())
+
+
+def test_mics_redacted_for_cross_site_with_allowed_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowlisted Origin alone is not enough — Sec-Fetch-Site must be same-origin."""
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    monkeypatch.setenv("FAUN_FRONTEND_ORIGINS", "https://faun.antopkin.ru")
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = {"Origin": "https://faun.antopkin.ru", "Sec-Fetch-Site": "cross-site"}
+    body = client.get("/api/v1/mics", headers=headers).json()
+    assert body
+    for mic in body:
+        leaked = SENSITIVE_MIC_FIELDS & set(mic.keys())
+        assert not leaked, f"cross-site bypass leaked sensitive fields: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# 8. Public GET routes stay open even when FAUN_API_KEY is set
+# ---------------------------------------------------------------------------
+
+
+# /api/v1/incidents/export removed — it now requires auth (PII leak class).
 PUBLIC_GET_ROUTES = [
     "/health",
     "/",
     "/api/v1/mics",
-    "/api/v1/incidents/export",
 ]
 
 

@@ -647,10 +647,14 @@
         }).then(function(mics) {
             var bounds = [];
             mics.forEach(function(m) {
+                /* Defensive: /api/v1/mics returns redacted payload (no `status` field)
+                   for unauth callers; fallback to `online` boolean. Frontend uses
+                   same-origin bypass to get full payload, but stay resilient. */
+                var status = m.status || (m.online ? 'online' : 'offline');
                 var color, radius;
-                if (m.status === 'online') {
+                if (status === 'online') {
                     color = '#00ff41'; radius = 4;
-                } else if (m.status === 'offline') {
+                } else if (status === 'offline') {
                     color = '#444'; radius = 3;
                 } else {
                     color = '#ff2020'; radius = 4;
@@ -664,7 +668,7 @@
                 popupEl.appendChild(document.createElement('br'));
                 var statusSpan = document.createElement('span');
                 statusSpan.style.color = color;
-                statusSpan.textContent = m.status.toUpperCase();
+                statusSpan.textContent = status.toUpperCase();
                 popupEl.appendChild(document.createTextNode('Статус: '));
                 popupEl.appendChild(statusSpan);
                 popupEl.appendChild(document.createElement('br'));

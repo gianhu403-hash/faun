@@ -32,7 +32,7 @@ async def fgis_forest_unit(lat: float, lon: float):
     }
 
 
-@router.get("/api/v1/fgis-lk/permits")
+@router.get("/api/v1/fgis-lk/permits", dependencies=[Depends(require_api_key)])
 async def fgis_permits(lat: float, lon: float):
     """Get active felling permits for location (FGIS-LK stub)."""
     permits = fgis_client.get_active_permits(lat, lon)

@@ -32,7 +32,7 @@ class PermitCheck(BaseModel):
     lon: float
 
 
-@router.get("/api/v1/permits")
+@router.get("/api/v1/permits", dependencies=[Depends(require_api_key)])
 async def list_permits():
     """List all logging permits."""
     permits = get_all_permits()

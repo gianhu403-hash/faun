@@ -139,11 +139,16 @@ class TestHTTPSmoke:
         assert "integrations" in data
         assert len(data["integrations"]) == 9
 
-    def test_reseed_status_returns_dict(self):
+    def test_reseed_status_returns_dict(self, monkeypatch):
+        """Reseed status leaks operator activity windows — auth-gated since FAUN-37b/B."""
         from starlette.testclient import TestClient
 
+        monkeypatch.setenv("FAUN_API_KEY", "test_reseed_status")
         client = TestClient(app, raise_server_exceptions=False)
-        resp = client.get("/api/v1/mics/reseed/status")
+        resp = client.get(
+            "/api/v1/mics/reseed/status",
+            headers={"X-API-Key": "test_reseed_status"},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "running" in data
