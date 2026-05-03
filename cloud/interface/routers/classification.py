@@ -5,11 +5,12 @@ import logging
 import os
 import uuid
 
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from pydantic import BaseModel
 
 from cloud.agent.classification_agent import verify_classification
 from cloud.agent.datasphere_client import classify_embeddings
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ class ClassifyAgentRequest(BaseModel):
     ndsi: float | None = None
 
 
-@router.post("/api/v1/classify")
+@router.post("/api/v1/classify", dependencies=[Depends(require_api_key)])
 async def classify_cloud(req: ClassifyRequest):
     """Cloud classification via DataSphere Node (2-tier verification)."""
     result = await classify_embeddings(req.embeddings)
@@ -37,7 +38,7 @@ async def classify_cloud(req: ClassifyRequest):
     return {"status": "ok", **result}
 
 
-@router.post("/api/v1/agent/classify")
+@router.post("/api/v1/agent/classify", dependencies=[Depends(require_api_key)])
 async def classify_agent(req: ClassifyAgentRequest):
     """Real-time classification verification via AI Studio agent."""
     result = await verify_classification(
@@ -72,7 +73,7 @@ def _get_classify_via_edge():
     return _classify_via_edge
 
 
-@router.post("/api/v1/live/audio")
+@router.post("/api/v1/live/audio", dependencies=[Depends(require_api_key)])
 async def live_audio(file: UploadFile):
     """Classify audio chunk from browser mic. Converts webm->wav via ffmpeg."""
     import subprocess
@@ -130,7 +131,7 @@ async def live_audio(file: UploadFile):
                 os.unlink(p)
 
 
-@router.post("/api/v1/live/photo")
+@router.post("/api/v1/live/photo", dependencies=[Depends(require_api_key)])
 async def live_photo(file: UploadFile):
     """Classify photo from browser camera via Gemma/YandexGPT Vision."""
     import base64

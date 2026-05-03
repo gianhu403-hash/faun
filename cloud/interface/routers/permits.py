@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from cloud.db.permits import (
@@ -12,6 +12,7 @@ from cloud.db.permits import (
     get_permits_for_location,
     has_valid_permit,
 )
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 
@@ -52,7 +53,7 @@ async def list_permits():
     ]
 
 
-@router.post("/api/v1/permits")
+@router.post("/api/v1/permits", dependencies=[Depends(require_api_key)])
 async def create_permit(req: PermitCreate):
     """Register a new logging permit."""
     permit = db_add_permit(
@@ -67,7 +68,7 @@ async def create_permit(req: PermitCreate):
     return {"status": "created", "id": permit.id}
 
 
-@router.delete("/api/v1/permits/{permit_id}")
+@router.delete("/api/v1/permits/{permit_id}", dependencies=[Depends(require_api_key)])
 async def delete_permit(permit_id: int):
     """Remove a logging permit."""
     removed = db_remove_permit(permit_id)
@@ -76,7 +77,7 @@ async def delete_permit(permit_id: int):
     return {"status": "removed"}
 
 
-@router.post("/api/v1/permits/check")
+@router.post("/api/v1/permits/check", dependencies=[Depends(require_api_key)])
 async def check_permit(req: PermitCheck):
     """Check if a location is covered by a valid permit."""
     has_permit = has_valid_permit(req.lat, req.lon)

@@ -27,8 +27,14 @@ logger = logging.getLogger(__name__)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start — register new ranger or greet existing one."""
+    """Handle /start — register new ranger or greet existing one.
+
+    NOTE: chat_id allowlist enforcement is handled by the application-level
+    TypeHandler installed in cloud.notify.bot_app.build_application
+    (see cloud.notify.handlers._allowlist). FAUN-37.
+    """
     chat_id = update.effective_chat.id
+
     existing = get_ranger_by_chat_id(chat_id)
 
     if existing:

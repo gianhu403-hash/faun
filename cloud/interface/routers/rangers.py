@@ -1,6 +1,6 @@
 """Rangers management API router."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from cloud.db.rangers import (
@@ -10,6 +10,7 @@ from cloud.db.rangers import (
     update_zone,
     set_active,
 )
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 
@@ -53,7 +54,7 @@ async def list_rangers():
     ]
 
 
-@router.post("/api/v1/rangers")
+@router.post("/api/v1/rangers", dependencies=[Depends(require_api_key)])
 async def create_ranger(req: RangerCreate):
     """Register a new ranger with their monitoring zone."""
     ranger = add_ranger(
@@ -67,7 +68,7 @@ async def create_ranger(req: RangerCreate):
     return {"status": "created", "id": ranger.id, "name": ranger.name}
 
 
-@router.delete("/api/v1/rangers/{chat_id}")
+@router.delete("/api/v1/rangers/{chat_id}", dependencies=[Depends(require_api_key)])
 async def delete_ranger(chat_id: int):
     """Remove a ranger by their Telegram chat ID."""
     removed = remove_ranger(chat_id)
@@ -76,7 +77,7 @@ async def delete_ranger(chat_id: int):
     return {"status": "removed"}
 
 
-@router.patch("/api/v1/rangers/{chat_id}/zone")
+@router.patch("/api/v1/rangers/{chat_id}/zone", dependencies=[Depends(require_api_key)])
 async def update_ranger_zone(chat_id: int, req: RangerZoneUpdate):
     """Update a ranger's monitoring zone."""
     updated = update_zone(chat_id, req.lat_min, req.lat_max, req.lon_min, req.lon_max)
@@ -85,7 +86,9 @@ async def update_ranger_zone(chat_id: int, req: RangerZoneUpdate):
     return {"status": "updated"}
 
 
-@router.patch("/api/v1/rangers/{chat_id}/active")
+@router.patch(
+    "/api/v1/rangers/{chat_id}/active", dependencies=[Depends(require_api_key)]
+)
 async def toggle_ranger_active(chat_id: int, active: bool = True):
     """Enable or disable alerts for a ranger."""
     updated = set_active(chat_id, active)

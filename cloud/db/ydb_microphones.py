@@ -194,9 +194,14 @@ class YDBMicrophoneRepository(MicrophoneRepository):
         driver = get_driver()
         table_path = f"{YDB_DATABASE}/microphones"
 
-        # Use scan query to avoid truncation on large result sets
+        # Use scan query to avoid truncation on large result sets.
+        # DECLARE $limit prevents SQL injection if limit ever becomes user-controlled.
         mics: list[Microphone] = []
-        it = driver.table_client.scan_query(f"SELECT * FROM microphones LIMIT {limit}")
+        query = """
+        DECLARE $limit AS Uint64;
+        SELECT * FROM microphones LIMIT $limit;
+        """
+        it = driver.table_client.scan_query(query, {"$limit": limit})
         while True:
             try:
                 result = next(it)
@@ -212,11 +217,14 @@ class YDBMicrophoneRepository(MicrophoneRepository):
 
         driver = get_driver()
 
-        # Use scan query to avoid TruncatedResponseError on large result sets
+        # Use scan query to avoid TruncatedResponseError on large result sets.
+        # DECLARE $limit prevents SQL injection if limit ever becomes user-controlled.
         mics: list[Microphone] = []
-        it = driver.table_client.scan_query(
-            f"SELECT * FROM microphones WHERE status = 'online' LIMIT {limit}"
-        )
+        query = """
+        DECLARE $limit AS Uint64;
+        SELECT * FROM microphones WHERE status = 'online' LIMIT $limit;
+        """
+        it = driver.table_client.scan_query(query, {"$limit": limit})
         while True:
             try:
                 result = next(it)

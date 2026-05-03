@@ -2,9 +2,10 @@
 
 import asyncio
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from cloud.interface.security import require_api_key
 from cloud.workflows.pipeline import get_pipeline_definition
 from cloud.workflows.yandex_workflows import register_workflow, run_workflow
 
@@ -28,7 +29,7 @@ def _get_run_demo():
     return _run_demo
 
 
-@router.post("/api/v1/workflow/run")
+@router.post("/api/v1/workflow/run", dependencies=[Depends(require_api_key)])
 async def workflow_run(req: WorkflowRunRequest):
     """Run the incident processing pipeline via WorkflowExecutor."""
     reg = await register_workflow()

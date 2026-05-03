@@ -45,7 +45,12 @@ except ImportError:
 
 
 async def drone_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start — welcome message."""
+    """Handle /start — welcome message.
+
+    NOTE: chat_id allowlist enforcement is handled by the application-level
+    TypeHandler installed in cloud.notify.drone_bot_app.build_drone_application
+    (see cloud.notify.handlers._allowlist). FAUN-37.
+    """
     await update.message.reply_text(
         "Faun Drone Bot\n\n"
         "Отправьте фото для анализа.\n"
@@ -57,8 +62,12 @@ async def drone_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def drone_photo_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle photo — classify via Vision and trigger alert pipeline."""
-    chat_id = update.effective_chat.id
+    """Handle photo — classify via Vision and trigger alert pipeline.
+
+    NOTE: chat_id allowlist enforcement is handled by the application-level
+    TypeHandler installed in cloud.notify.drone_bot_app.build_drone_application
+    (see cloud.notify.handlers._allowlist). FAUN-37.
+    """
     await update.message.reply_text("Анализирую фото...")
 
     try:

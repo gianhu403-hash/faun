@@ -16,3 +16,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt && pip install pytest pytest-asyncio
       - run: python -m pytest tests/ -v --tb=short
+      - name: Bandit (SAST)
+        run: pip install bandit && bandit -r cloud edge gateway -ll -x tests || true
+      - name: pip-audit (SCA)
+        run: pip install pip-audit && pip-audit -r requirements.txt || true
