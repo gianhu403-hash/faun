@@ -216,7 +216,9 @@ if _os.getenv("YDB_ENDPOINT"):
     update_status = _repo.update_status
     update_incident = _repo.update_incident
     get_all_incidents = _repo.get_all_incidents
-    get_stale_incidents = getattr(_repo, "get_stale_incidents", get_stale_incidents)
-    get_recent_nearby_incident = getattr(
-        _repo, "get_recent_nearby_incident", get_recent_nearby_incident
-    )
+    # FAUN-38a: loud fail if YDB repo is missing a required method.
+    # The previous getattr() fallback silently used in-memory functions
+    # operating on an empty _incidents dict — making cleanup-job and
+    # spatial dedup invisibly broken on YDB-backed prod.
+    get_stale_incidents = _repo.get_stale_incidents
+    get_recent_nearby_incident = _repo.get_recent_nearby_incident

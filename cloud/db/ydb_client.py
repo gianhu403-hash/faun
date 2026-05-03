@@ -145,6 +145,10 @@ CREATE TABLE incidents (
     ranger_report_legal Utf8,
     resolution_details Utf8,
     is_demo Bool,
+    drone_photo_b64 String,
+    drone_comment Utf8,
+    ranger_photo_b64 String,
+    alert_message_ids Utf8,
     PRIMARY KEY (id)
 )
 """
@@ -159,6 +163,11 @@ _ALTER_INCIDENTS = [
     "ALTER TABLE incidents ADD COLUMN ranger_report_legal Utf8",
     "ALTER TABLE incidents ADD COLUMN resolution_details Utf8",
     "ALTER TABLE incidents ADD COLUMN is_demo Bool",
+    # FAUN-38a B2: persist drone evidence + alert tracking
+    "ALTER TABLE incidents ADD COLUMN drone_photo_b64 String",
+    "ALTER TABLE incidents ADD COLUMN drone_comment Utf8",
+    "ALTER TABLE incidents ADD COLUMN ranger_photo_b64 String",
+    "ALTER TABLE incidents ADD COLUMN alert_message_ids Utf8",
 ]
 
 DDL_MICROPHONES = """
