@@ -89,11 +89,21 @@ def test_dotenv_example_has_placeholder_only():
     assert not bad, ".env.example must have empty placeholders only:\n" + "\n".join(bad)
 
 
-def test_dotenv_pattern_in_gitignore():
-    """`.env*` (not just `.env`) must be in .gitignore so .env.local etc. are caught."""
-    text = (ROOT / ".gitignore").read_text()
-    has_pattern = any(
-        line.strip() in (".env", ".env*", ".env.*", "*.env")
-        for line in text.splitlines()
+def test_dotenv_family_is_actually_ignored():
+    """All `.env.*` variants must be ignored — verifies behavior, not pattern.
+
+    Catches the regression where .gitignore has bare `.env` (only ignores the
+    literal file, not `.env.local` / `.env.production` / `.env.dev`).
+    """
+    variants = [".env", ".env.local", ".env.production", ".env.dev", ".env.staging"]
+    out = subprocess.run(
+        ["git", "check-ignore", "--no-index", *variants],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
     )
-    assert has_pattern, ".gitignore must include .env or .env* pattern"
+    ignored = set(out.stdout.strip().splitlines())
+    missing = set(variants) - ignored
+    assert not missing, (
+        f"These .env variants are NOT git-ignored — secrets could leak: {sorted(missing)}"
+    )
