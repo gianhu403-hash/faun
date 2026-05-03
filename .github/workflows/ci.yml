@@ -16,7 +16,23 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt && pip install pytest pytest-asyncio
       - run: python -m pytest tests/ -v --tb=short
-      - name: Bandit (SAST)
-        run: pip install bandit && bandit -r cloud edge gateway -ll -x tests || true
-      - name: pip-audit (SCA)
-        run: pip install pip-audit && pip-audit -r requirements.txt || true
+      - name: Bandit setup
+        run: pip install bandit
+      - name: Bandit (visibility — log all low+, never fail)
+        # Pre-existing low/medium findings are tracked tech debt; this step keeps
+        # them visible in CI logs without blocking deploy.
+        run: bandit -r cloud edge gateway -ll -x tests --exit-zero
+      - name: Bandit (fail-gate — HIGH severity only)
+        # Replaces the previous `bandit ... || true` silent-skip that hid
+        # CVE-class issues like B701 (Jinja autoescape=False) before FAUN-37c.
+        run: bandit -r cloud edge gateway --severity-level high -x tests
+      - name: pip-audit setup
+        run: pip install pip-audit
+      - name: pip-audit cloud (strict — internet-exposed)
+        run: pip-audit -r requirements-cloud.txt --strict
+      - name: pip-audit gateway (strict — internet-exposed)
+        run: pip-audit -r requirements-gateway.txt --strict
+      - name: pip-audit edge (soft — on-device, TF CVEs often unfixable)
+        run: pip-audit -r requirements-edge.txt || true
+      - name: pip-audit root (soft — dev/demo deps)
+        run: pip-audit -r requirements.txt || true

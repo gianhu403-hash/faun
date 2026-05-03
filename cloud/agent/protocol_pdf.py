@@ -75,7 +75,12 @@ def _make_jinja_env(template_dir: str) -> jinja2.Environment:
 
     Delimiters: ((*  *)) for variables, ((%  %)) for blocks, ((#  #)) for comments.
     """
-    env = jinja2.Environment(
+    # autoescape=False is intentional and required: this Jinja env renders LaTeX
+    # source, where HTML-escape rules (`&lt;`, `&amp;`, etc.) corrupt the document
+    # syntax. Templates are checked into git (cloud/agent/templates/), values are
+    # rendered into LaTeX which is then compiled; there is no HTML/JS sink.
+    # Bandit B701 is a false positive in the LaTeX-template use case.
+    env = jinja2.Environment(  # nosec B701
         loader=jinja2.FileSystemLoader(template_dir),
         block_start_string="((%",
         block_end_string="%))",
