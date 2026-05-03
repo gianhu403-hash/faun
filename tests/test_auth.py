@@ -169,7 +169,90 @@ def test_mutating_route_accepts_correct_api_key(
 
 
 # ---------------------------------------------------------------------------
-# 5. Public GET routes stay open even when FAUN_API_KEY is set
+# 5. Same-origin bypass (FAUN-37b/A): allowed Origin + Sec-Fetch-Site=same-origin
+# ---------------------------------------------------------------------------
+
+
+SAME_ORIGIN_HEADERS = {
+    "Origin": "https://faun.antopkin.ru",
+    "Sec-Fetch-Site": "same-origin",
+}
+
+
+@pytest.fixture
+def env_with_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAUN_API_KEY + FAUN_FRONTEND_ORIGINS allowlisting the production origin."""
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    monkeypatch.setenv("FAUN_FRONTEND_ORIGINS", "https://faun.antopkin.ru")
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_MUTATING_ROUTES, ids=_PARAM_IDS)
+def test_origin_bypass_accepts_allowlisted_origin(
+    method: str, path: str, env_with_origin: None
+) -> None:
+    """Allowlisted Origin + Sec-Fetch-Site=same-origin must bypass X-API-Key check."""
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = _call(client, method, path, headers=SAME_ORIGIN_HEADERS)
+    assert resp.status_code not in (401, 403, 503), (
+        f"{method} {path}: same-origin bypass rejected with {resp.status_code}"
+    )
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_MUTATING_ROUTES, ids=_PARAM_IDS)
+def test_origin_bypass_rejects_wrong_origin(
+    method: str, path: str, env_with_origin: None
+) -> None:
+    """Origin outside FAUN_FRONTEND_ORIGINS must NOT bypass auth — still 403."""
+    headers = {"Origin": "https://evil.example", "Sec-Fetch-Site": "same-origin"}
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = _call(client, method, path, headers=headers)
+    assert resp.status_code == 403, (
+        f"{method} {path}: wrong-origin bypass accepted with {resp.status_code}"
+    )
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_MUTATING_ROUTES, ids=_PARAM_IDS)
+def test_origin_bypass_requires_sec_fetch_site_same_origin(
+    method: str, path: str, env_with_origin: None
+) -> None:
+    """Allowlisted Origin without Sec-Fetch-Site=same-origin must NOT bypass."""
+    headers = {"Origin": "https://faun.antopkin.ru", "Sec-Fetch-Site": "cross-site"}
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = _call(client, method, path, headers=headers)
+    assert resp.status_code == 403, (
+        f"{method} {path}: cross-site bypass accepted with {resp.status_code}"
+    )
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_MUTATING_ROUTES, ids=_PARAM_IDS)
+def test_origin_bypass_disabled_when_env_unset(
+    method: str, path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without FAUN_FRONTEND_ORIGINS, bypass must fail-closed even with same-origin headers."""
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_123")
+    monkeypatch.delenv("FAUN_FRONTEND_ORIGINS", raising=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = _call(client, method, path, headers=SAME_ORIGIN_HEADERS)
+    assert resp.status_code == 403, (
+        f"{method} {path}: bypass accepted without FAUN_FRONTEND_ORIGINS env"
+    )
+
+
+@pytest.mark.parametrize("method,path", PROTECTED_MUTATING_ROUTES, ids=_PARAM_IDS)
+def test_origin_bypass_rejects_origin_null(
+    method: str, path: str, env_with_origin: None
+) -> None:
+    """Origin: null (sandboxed iframe, file://, data:) must NEVER bypass — attack vector."""
+    headers = {"Origin": "null", "Sec-Fetch-Site": "same-origin"}
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = _call(client, method, path, headers=headers)
+    assert resp.status_code == 403, (
+        f"{method} {path}: Origin: null bypass accepted with {resp.status_code}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. Public GET routes stay open even when FAUN_API_KEY is set
 # ---------------------------------------------------------------------------
 
 
