@@ -38,14 +38,20 @@ jobs:
             echo "=== Post-deploy docker system df ==="
             docker system df
             # ---- Post-deploy smoke (FAUN-37c) ----
-            # Catches the silent-503 regression class: pre-PR healthcheck-driven deploys went green
-            # for days while POST /api/v1/* returned 503 because FAUN_API_KEY was unset on VPS.
-            sleep 10
-            HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8002/health)
+            # Catches the silent-503 regression class. cloud lifespan can take
+            # 30-60s (YDB conn + bot startup + seed mics) — poll /health up to 90s
+            # before checking auth gates.
+            echo "smoke: waiting for /health..."
+            HEALTH="000"
+            for i in $(seq 1 30); do
+              HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8002/health 2>/dev/null || echo "000")
+              [ "$HEALTH" = "200" ] && { echo "smoke: /health up after ${i}s"; break; }
+              sleep 3
+            done
+            test "$HEALTH" = "200" || { echo "FAIL health (got $HEALTH after 90s)"; exit 1; }
             MUTE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' http://127.0.0.1:8002/api/v1/demo -d '{}')
             READ=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8002/api/v1/mics)
             echo "smoke: health=$HEALTH mutate=$MUTE read=$READ"
-            test "$HEALTH" = "200" || { echo "FAIL health (got $HEALTH)"; exit 1; }
             # 403 = require_api_key wired AND FAUN_API_KEY env set; 503 = env missing.
             test "$MUTE" = "403" || { echo "FAIL mutate (expect 403, got $MUTE — FAUN_API_KEY env missing on VPS?)"; exit 1; }
             test "$READ" = "200" || { echo "FAIL read (got $READ)"; exit 1; }
