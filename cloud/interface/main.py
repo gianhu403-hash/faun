@@ -5,10 +5,11 @@ import os
 import random
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
+from cloud.interface.security import require_api_key
 from cloud.interface.routers.rangers import router as rangers_router
 from cloud.interface.routers.permits import router as permits_router
 from cloud.interface.routers.mics import router as mics_router
@@ -124,8 +125,8 @@ app.include_router(rag_router)
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request, exc):
-    logger.exception("Unhandled error on %s: %s", request.url.path, exc)
-    return JSONResponse(status_code=500, content={"error": str(exc)})
+    logger.exception("unhandled %s on %s", type(exc).__name__, request.url.path)
+    return JSONResponse(status_code=500, content={"error": "internal"})
 
 
 @app.get("/health")
@@ -228,7 +229,11 @@ class DemoResponse(BaseModel):
     scenario: str
 
 
-@app.post("/api/v1/demo", response_model=DemoResponse)
+@app.post(
+    "/api/v1/demo",
+    response_model=DemoResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def start_demo_v1(req: DemoRequest):
     """Start a demo scenario. Optionally specify source coordinates."""
     asyncio.create_task(
@@ -255,7 +260,7 @@ class GatewayEvent(BaseModel):
     model_config = {"extra": "allow"}
 
 
-@app.post("/api/v1/gateway-event")
+@app.post("/api/v1/gateway-event", dependencies=[Depends(require_api_key)])
 async def receive_gateway_event(payload: GatewayEvent):
     """Receive a processed event from the gateway and broadcast to dashboard."""
     await broadcast(payload.model_dump())
@@ -263,7 +268,10 @@ async def receive_gateway_event(payload: GatewayEvent):
 
 
 # Legacy endpoint for backward compatibility
-@app.post("/api/v1/incidents/{incident_id}/dispatch-drone")
+@app.post(
+    "/api/v1/incidents/{incident_id}/dispatch-drone",
+    dependencies=[Depends(require_api_key)],
+)
 async def dispatch_drone(incident_id: str):
     """Manually dispatch drone to incident location (VERIFY Telegram button)."""
     incident = get_incident(incident_id)
@@ -329,7 +337,7 @@ async def _run_drone_for_incident(
         await broadcast({"event": "pipeline_end", "reason": "drone_error"})
 
 
-@app.post("/demo/start")
+@app.post("/demo/start", dependencies=[Depends(require_api_key)])
 async def start_demo_legacy(scenario: str = "chainsaw"):
     asyncio.create_task(_run_demo(scenario))
     return {"status": "started", "scenario": scenario}

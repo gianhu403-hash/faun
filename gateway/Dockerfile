@@ -17,4 +17,12 @@ COPY . .
 
 EXPOSE 9000
 
+# Create unprivileged user. UID 1000 = matches typical host user (deploy).
+# Gateway has no bind-mount, but uniform UID across services simplifies ops.
+RUN groupadd -r -g 1000 faun \
+    && useradd -r -u 1000 -g faun -d /app -s /sbin/nologin faun \
+    && chown -R faun:faun /app
+
+USER faun
+
 CMD ["python", "-m", "gateway.relay"]

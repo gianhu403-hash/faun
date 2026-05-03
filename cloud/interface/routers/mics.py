@@ -3,7 +3,7 @@
 import concurrent.futures
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from cloud.db.microphones import (
@@ -14,6 +14,7 @@ from cloud.db.microphones import (
     clear_all as mic_clear_all,
     seed_microphones,
 )
+from cloud.interface.security import require_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ async def list_mics_online():
     ]
 
 
-@router.post("/api/v1/mics/reseed")
+@router.post("/api/v1/mics/reseed", dependencies=[Depends(require_api_key)])
 async def reseed_mics():
     """Delete all microphones and re-seed from updated grid parameters.
 
@@ -92,7 +93,7 @@ async def reseed_status():
     return _reseed_status
 
 
-@router.patch("/api/v1/mics/{mic_uid}/status")
+@router.patch("/api/v1/mics/{mic_uid}/status", dependencies=[Depends(require_api_key)])
 async def update_mic_status(mic_uid: str, req: MicStatusUpdate):
     """Update microphone status."""
     ok = mic_set_status(mic_uid, req.status)
@@ -101,7 +102,7 @@ async def update_mic_status(mic_uid: str, req: MicStatusUpdate):
     return {"status": "updated", "mic_uid": mic_uid, "new_status": req.status}
 
 
-@router.patch("/api/v1/mics/{mic_uid}/battery")
+@router.patch("/api/v1/mics/{mic_uid}/battery", dependencies=[Depends(require_api_key)])
 async def update_mic_battery(mic_uid: str, req: MicBatteryUpdate):
     """Update microphone battery percentage."""
     ok = mic_set_battery(mic_uid, req.battery_pct)

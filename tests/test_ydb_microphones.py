@@ -47,9 +47,14 @@ class TestGetOnlineUseScanQuery:
         result = repo.get_online(limit=2000)
 
         mock_driver.table_client.scan_query.assert_called_once()
-        query_arg = mock_driver.table_client.scan_query.call_args[0][0]
+        call_args = mock_driver.table_client.scan_query.call_args
+        query_arg = call_args[0][0]
+        params_arg = call_args[0][1]
         assert "status = 'online'" in query_arg
-        assert "LIMIT 2000" in query_arg
+        # FAUN-37: parameterized via DECLARE $limit (was f-string LIMIT {limit})
+        assert "DECLARE $limit" in query_arg
+        assert "LIMIT $limit" in query_arg
+        assert params_arg == {"$limit": 2000}
         assert len(result) == 3
         assert all(isinstance(m, Microphone) for m in result)
 

@@ -159,11 +159,14 @@ async def test_query_rag_enriched_uses_plain_on_sdk_timeout():
 
 
 @pytest.mark.asyncio
-async def test_endpoint_timeout_fallback_is_class_aware():
+async def test_endpoint_timeout_fallback_is_class_aware(monkeypatch):
     """When the endpoint catches TimeoutError, the static fallback should
     mention articles relevant to the audio_class, not generic ones."""
     from httpx import ASGITransport, AsyncClient
     from cloud.interface.main import app
+
+    # FAUN-37: /api/v1/rag-query is now protected by require_api_key
+    monkeypatch.setenv("FAUN_API_KEY", "test_key_rag")
 
     with patch(
         "cloud.interface.routers.rag.query_rag_enriched",
@@ -181,6 +184,7 @@ async def test_endpoint_timeout_fallback_is_class_aware():
                     "lat": 57.3,
                     "lon": 44.6,
                 },
+                headers={"X-API-Key": "test_key_rag"},
             )
 
     assert resp.status_code == 200

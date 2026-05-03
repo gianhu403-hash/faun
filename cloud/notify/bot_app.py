@@ -9,10 +9,11 @@ import os
 import logging
 import traceback
 
-from telegram import BotCommand, MenuButtonWebApp, WebAppInfo
-from telegram.ext import Application, ContextTypes
+from telegram import BotCommand, MenuButtonWebApp, Update, WebAppInfo
+from telegram.ext import Application, ContextTypes, TypeHandler
 
 from cloud.notify.bot_handlers import get_handlers
+from cloud.notify.handlers._allowlist import make_allowlist_gate
 from cloud.db.incidents import get_stale_incidents, update_incident, clear_chat_incident
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,16 @@ def build_application() -> Application:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
 
     app = Application.builder().token(token).build()
+
+    # FAUN-37: install allowlist gate FIRST (group=-1 runs before group=0).
+    # Drops Updates from non-allowed chat_ids before any business handler runs.
+    app.add_handler(
+        TypeHandler(
+            Update, make_allowlist_gate("ALLOWED_RANGER_CHAT_IDS", "ranger_bot")
+        ),
+        group=-1,
+    )
+
     for handler in get_handlers():
         app.add_handler(handler)
     app.add_error_handler(_error_handler)

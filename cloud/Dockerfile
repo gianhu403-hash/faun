@@ -28,4 +28,13 @@ RUN mkdir -p demo/audio demo/photos /tmp/yamnet_cache
 
 EXPOSE 8000
 
+# Create unprivileged user. UID 1000 = matches typical host user (deploy).
+# bind-mount in docker-compose preserves host UID, so this lets faun write to bind-mounted dirs.
+RUN groupadd -r -g 1000 faun \
+    && useradd -r -u 1000 -g faun -d /app -s /sbin/nologin faun \
+    && mkdir -p /tmp/yamnet_cache \
+    && chown -R faun:faun /app /tmp/yamnet_cache
+
+USER faun
+
 CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000"]

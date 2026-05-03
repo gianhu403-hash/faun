@@ -3,10 +3,11 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from cloud.agent.rag_agent import query_rag, query_rag_enriched, IncidentContext
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -44,7 +45,11 @@ class RagQueryResponse(BaseModel):
     answer: str
 
 
-@router.post("/api/v1/rag-query", response_model=RagQueryResponse)
+@router.post(
+    "/api/v1/rag-query",
+    response_model=RagQueryResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def rag_query_endpoint(req: RagQueryRequest):
     """Query RAG agent with File Search + Web Search (Yandex AI Studio)."""
     try:

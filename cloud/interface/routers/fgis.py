@@ -1,9 +1,10 @@
 """FGIS-LK integration API router (stub)."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from cloud.integrations.fgis_lk import fgis_client, ViolationReport
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ async def fgis_permits(lat: float, lon: float):
     ]
 
 
-@router.post("/api/v1/fgis-lk/violation")
+@router.post("/api/v1/fgis-lk/violation", dependencies=[Depends(require_api_key)])
 async def fgis_violation(req: ViolationSubmit):
     """Submit violation report to FGIS-LK (stub)."""
     report = ViolationReport(
