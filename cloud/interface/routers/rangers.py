@@ -31,7 +31,7 @@ class RangerZoneUpdate(BaseModel):
     lon_max: float
 
 
-@router.get("/api/v1/rangers")
+@router.get("/api/v1/rangers", dependencies=[Depends(require_api_key)])
 async def list_rangers():
     """List all registered rangers."""
     rangers = get_all_rangers()

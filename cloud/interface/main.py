@@ -135,7 +135,10 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/v1/incidents/{incident_id}/protocol.pdf")
+@app.get(
+    "/api/v1/incidents/{incident_id}/protocol.pdf",
+    dependencies=[Depends(require_api_key)],
+)
 async def protocol_pdf(incident_id: str):
     incident = get_incident(incident_id)
     if not incident:

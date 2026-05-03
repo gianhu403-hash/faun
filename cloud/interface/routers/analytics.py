@@ -3,13 +3,19 @@
 import csv
 import io
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
+
+from cloud.interface.security import require_api_key
 
 router = APIRouter()
 
 
-@router.get("/api/v1/incidents/export", response_class=PlainTextResponse)
+@router.get(
+    "/api/v1/incidents/export",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def export_incidents_csv():
     """Export incidents as CSV for DataLens integration."""
     from cloud.analytics.datalens import get_datalens_incidents
@@ -67,7 +73,7 @@ async def ai_studio_stack():
     }
 
 
-@router.get("/api/v1/datalens/incidents")
+@router.get("/api/v1/datalens/incidents", dependencies=[Depends(require_api_key)])
 async def datalens_incidents():
     """JSON incidents data for DataLens API connector."""
     from cloud.analytics.datalens import get_datalens_incidents

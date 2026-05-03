@@ -14,7 +14,9 @@ from cloud.db.microphones import (
     clear_all as mic_clear_all,
     seed_microphones,
 )
-from cloud.interface.security import require_api_key
+from fastapi import Header
+
+from cloud.interface.security import is_authenticated, require_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -31,28 +33,52 @@ class MicBatteryUpdate(BaseModel):
     battery_pct: float
 
 
+def _mic_dict(m, authed: bool) -> dict:
+    """Public-safe by default; full payload only for authed callers.
+
+    Public fields needed by Leaflet map: position + zone_type + online dot color.
+    Authed-only fields are operational telemetry that doubles as a poacher's
+    "where won't they hear me" map: battery_pct, granular status, install date,
+    sub-district name (FAUN-37b/B).
+    """
+    base = {
+        "mic_uid": m.mic_uid,
+        "lat": m.lat,
+        "lon": m.lon,
+        "zone_type": m.zone_type,
+        "online": m.status == "online",
+    }
+    if authed:
+        base.update(
+            {
+                "status": m.status,
+                "battery_pct": m.battery_pct,
+                "installed_at": m.installed_at,
+                "sub_district": m.sub_district,
+            }
+        )
+    return base
+
+
 @router.get("/api/v1/mics")
-async def list_mics():
-    """List all microphones in the network."""
-    mics = mic_get_all()
-    return [
-        {
-            "mic_uid": m.mic_uid,
-            "lat": m.lat,
-            "lon": m.lon,
-            "zone_type": m.zone_type,
-            "sub_district": m.sub_district,
-            "status": m.status,
-            "battery_pct": m.battery_pct,
-            "installed_at": m.installed_at,
-        }
-        for m in mics
-    ]
+async def list_mics(
+    x_api_key: str | None = Header(default=None),
+    origin: str | None = Header(default=None),
+    sec_fetch_site: str | None = Header(default=None, alias="Sec-Fetch-Site"),
+):
+    """List all microphones in the network. Telemetry redacted for unauth callers."""
+    authed = is_authenticated(x_api_key, origin, sec_fetch_site)
+    return [_mic_dict(m, authed) for m in mic_get_all()]
 
 
-@router.get("/api/v1/mics/online")
+@router.get("/api/v1/mics/online", dependencies=[Depends(require_api_key)])
 async def list_mics_online():
-    """List only online microphones."""
+    """List only online microphones.
+
+    Authed-only: combined with public /api/v1/mics this would let a poacher
+    diff online vs all to get the exact "where can they hear me" map even
+    after FAUN-37b/B redaction.
+    """
     mics = mic_get_online()
     return [
         {"mic_uid": m.mic_uid, "lat": m.lat, "lon": m.lon, "zone_type": m.zone_type}
@@ -87,9 +113,9 @@ async def reseed_mics():
     return {"status": "started", "message": "Reseed running in background"}
 
 
-@router.get("/api/v1/mics/reseed/status")
+@router.get("/api/v1/mics/reseed/status", dependencies=[Depends(require_api_key)])
 async def reseed_status():
-    """Check reseed progress."""
+    """Check reseed progress (op telemetry — leaks operator activity windows)."""
     return _reseed_status
 
 

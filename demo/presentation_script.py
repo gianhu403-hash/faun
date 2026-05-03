@@ -19,12 +19,20 @@ Steps:
 import argparse
 import asyncio
 import json
+import os
 import sys
 
 import httpx
 
 BASE_URL = "http://localhost:8000"
 TIMEOUT = 15
+
+# After FAUN-37 / FAUN-37b, mutating endpoints + several read endpoints require X-API-Key.
+# On the VPS, FAUN_API_KEY is in ~/apps/faun/.env loaded by docker compose.
+# Run this script either inside the cloud container (env auto-loaded) or
+# `FAUN_API_KEY=$(grep ^FAUN_API_KEY ~/apps/faun/.env | cut -d= -f2-) python -m demo.presentation_script`.
+_API_KEY = os.getenv("FAUN_API_KEY", "")
+_AUTH_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
 
 
 def _header(step: int, title: str) -> None:
@@ -70,11 +78,14 @@ async def step_1_health():
         except Exception as e:
             _fail(f"AI Studio endpoint: {e}")
 
-        # Rangers
+        # Rangers (requires auth after FAUN-37b/B)
         try:
-            r = await c.get(f"{BASE_URL}/api/v1/rangers")
-            rangers = r.json()
-            _ok(f"Егерей зарегистрировано: {len(rangers)}")
+            r = await c.get(f"{BASE_URL}/api/v1/rangers", headers=_AUTH_HEADERS)
+            if r.status_code == 403:
+                _fail("Rangers: 403 — set FAUN_API_KEY env (see header comment)")
+            else:
+                rangers = r.json()
+                _ok(f"Егерей зарегистрировано: {len(rangers)}")
         except Exception as e:
             _fail(f"Rangers endpoint: {e}")
 
@@ -100,7 +111,12 @@ async def step_3_live_pipeline():
             r = await c.post(
                 f"{BASE_URL}/api/v1/demo",
                 json={"scenario": "chainsaw"},
+                headers=_AUTH_HEADERS,
             )
+            if r.status_code == 403:
+                _fail("Demo: 403 — set FAUN_API_KEY env (see header comment)")
+                return
+            r.raise_for_status()
             data = r.json()
             _ok(f"Сценарий запущен: {data}")
             _info("Смотрите:")
@@ -179,6 +195,13 @@ def main():
         "--step", type=int, choices=range(1, 6), help="Run specific step"
     )
     args = parser.parse_args()
+
+    if not _API_KEY:
+        print("[WARN] FAUN_API_KEY env empty — auth-required steps will 403.")
+        print(
+            "       export FAUN_API_KEY=$(grep ^FAUN_API_KEY ~/apps/faun/.env | cut -d= -f2-)"
+        )
+        print()
 
     if args.step:
         asyncio.run(STEPS[args.step]())
