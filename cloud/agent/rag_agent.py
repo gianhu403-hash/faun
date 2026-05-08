@@ -307,15 +307,26 @@ def _build_enriched_prompt(ctx: IncidentContext) -> str:
     if ctx.lat and ctx.lon:
         try:
             forest_unit = fgis_client.get_forest_unit(ctx.lat, ctx.lon)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "FGIS lookup failed at %.4f,%.4f: %s",
+                ctx.lat,
+                ctx.lon,
+                e,
+            )
         try:
             if has_valid_permit(ctx.lat, ctx.lon):
                 permit_status = "ЕСТЬ действующая лесная декларация"
             else:
                 permit_status = "НЕТ действующей лесной декларации"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Permit check failed at %.4f,%.4f: %s",
+                ctx.lat,
+                ctx.lon,
+                e,
+            )
+            permit_status = "ошибка проверки (БД permits недоступна)"
 
     hour = datetime.now().hour
     time_of_day = "ночь (отягчающий фактор)" if hour < 6 or hour >= 22 else "день"
