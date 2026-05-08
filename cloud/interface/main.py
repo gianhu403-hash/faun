@@ -145,6 +145,7 @@ async def protocol_pdf(incident_id: str):
     if not incident:
         return JSONResponse(status_code=404, content={"error": "incident not found"})
 
+    degraded_reason: str | None = None
     if incident.protocol_pdf:
         pdf_bytes = incident.protocol_pdf
     else:
@@ -160,6 +161,11 @@ async def protocol_pdf(incident_id: str):
                 "RAG failed for incident %s, generating without legal articles",
                 incident_id,
             )
+            degraded_reason = "rag_unavailable"
+
+        if not legal_articles and degraded_reason is None:
+            # RAG returned empty without raising — treat as degraded too.
+            degraded_reason = "rag_empty"
 
         try:
             pdf_bytes = generate_protocol(incident, legal_articles)
@@ -170,12 +176,15 @@ async def protocol_pdf(incident_id: str):
             )
         update_incident(incident_id, protocol_pdf=pdf_bytes)
 
+    headers = {
+        "Content-Disposition": f'attachment; filename="protocol_{incident_id}.pdf"'
+    }
+    if degraded_reason:
+        headers["X-Protocol-Degraded"] = degraded_reason
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="protocol_{incident_id}.pdf"'
-        },
+        headers=headers,
     )
 
 
