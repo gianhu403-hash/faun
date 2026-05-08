@@ -164,7 +164,8 @@ async def _call_yandex_plain(prompt: str) -> str:
         )
 
     if resp.status_code != 200:
-        logger.error("YandexGPT plain error %s: %s", resp.status_code, resp.text)
+        # Body suppressed: Yandex error responses can echo auth context.
+        logger.error("YandexGPT plain error status=%s", resp.status_code)
         return _fallback_response(prompt)
 
     return resp.json()["result"]["alternatives"][0]["message"]["text"]

@@ -24,6 +24,7 @@ from cloud.notify.drone_bot_app import start_drone_bot, stop_drone_bot
 from cloud.agent.protocol_pdf import generate_protocol
 from cloud.agent.rag_agent import query_legal_articles
 from cloud.db.incidents import get_incident, update_incident
+from cloud.db.microphones import seed_microphones
 
 import httpx
 from edge.audio.classifier import AudioResult
@@ -586,8 +587,10 @@ async def _run_demo(
             await broadcast({"event": "drone_photo", "drone_b64": photo.b64})
             return photo
 
-        # send_pending creates an Incident and returns it
-        photo, incident = await asyncio.gather(
+        # send_pending creates an Incident and returns it.
+        # return_exceptions=True so a send_pending fail (e.g. transient TG/DB)
+        # does not cancel drone_task before its drone_photo broadcast.
+        photo_res, incident_res = await asyncio.gather(
             drone_task(),
             deps["send_pending"](
                 location.lat,
@@ -598,7 +601,19 @@ async def _run_demo(
                 is_demo=True,
                 broadcast=True,
             ),
+            return_exceptions=True,
         )
+        if isinstance(photo_res, BaseException):
+            logger.error("Demo: drone_task failed", exc_info=photo_res)
+            await broadcast({"event": "pipeline_end", "reason": "drone_error"})
+            return
+        photo = photo_res
+        if isinstance(incident_res, BaseException):
+            logger.error("Demo: send_pending failed", exc_info=incident_res)
+            await broadcast({"event": "alert_failed", "reason": "send_pending_error"})
+            incident = None
+        else:
+            incident = incident_res
 
         vision_result = await deps["classify_photo"](photo.b64)
         await broadcast(
@@ -636,7 +651,7 @@ async def _run_demo(
                 "event": "alert_sent",
                 "text": alert.text,
                 "priority": alert.priority,
-                "incident_id": incident.id,
+                "incident_id": incident.id if incident else None,
             }
         )
         await drone.return_home()

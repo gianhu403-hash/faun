@@ -2,6 +2,7 @@
 
 import logging
 import random
+import sqlite3
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -144,6 +145,20 @@ async def confirm_reg_callback(
             zone_lon_min=district.lon_min,
             zone_lon_max=district.lon_max,
         )
+    except sqlite3.IntegrityError:
+        logger.warning("Duplicate registration chat_id=%s", chat_id)
+        _registration_state.pop(chat_id, None)
+        await query.edit_message_text(
+            "Вы уже зарегистрированы. Отправьте /status для проверки."
+        )
+        return
+    except sqlite3.OperationalError:
+        logger.exception("DB unavailable for chat_id=%s", chat_id)
+        _registration_state.pop(chat_id, None)
+        await query.edit_message_text(
+            "База данных временно недоступна. Сообщите администратору."
+        )
+        return
     except Exception:
         logger.exception("Failed to register ranger chat_id=%s", chat_id)
         _registration_state.pop(chat_id, None)

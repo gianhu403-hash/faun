@@ -55,9 +55,23 @@ def _make_deps(*, send_drone: bool = True, send_lora: bool = False):
     )
 
     photo = types.SimpleNamespace(b64="AAAA", data=b"\x00")
-    drone = AsyncMock()
-    drone.fly_to.return_value = AsyncMock(__aiter__=AsyncMock(return_value=iter([])))
-    drone.capture_photo.return_value = photo
+
+    # AsyncMock can't model async generators (drone.fly_to). Use a real stub.
+    class _StubDrone:
+        async def takeoff(self):
+            return None
+
+        async def fly_to(self, lat, lon):
+            if False:
+                yield None  # pragma: no cover
+
+        async def capture_photo(self):
+            return photo
+
+        async def return_home(self):
+            return None
+
+    drone = _StubDrone()
 
     incident = types.SimpleNamespace(id=42)
     vision = types.SimpleNamespace(
