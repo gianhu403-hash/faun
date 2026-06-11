@@ -37,3 +37,6 @@ site/
 # Claude Code local state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Runtime job workdirs (FAUN_JOBS_ROOT default)
+jobs/
