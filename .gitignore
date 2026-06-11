@@ -40,3 +40,8 @@ site/
 
 # Runtime job workdirs (FAUN_JOBS_ROOT default)
 jobs/
+
+# Experiment runtime artifacts
+experiments/logs/
+experiments/results.csv
+experiments/results/
