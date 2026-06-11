@@ -18,8 +18,17 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 ## Phase 1 — launched concurrently (web ⊥ ssh ⊥ repo-worktree)
 - ✅ Track A research DONE (5/5 surveys + synth; report at /Users/user/sandbox/faun-nightly-artifacts/research/research-report.md). KEY: top classifier = **Perch 2** (Apache 2.0, perch_v2_cpu via bioacoustics-model-zoo, needs Kaggle; fallback Perch 1 TFHub no-auth). BirdNET = **CC BY-NC-SA** (ShareAlike taints fine-tuned heads!) — inventory only. Detector = onset.py CPU stage-1 (+CLAP GPU verifier optional; NDSI unfit for <10s events). Without xeno-canto: only binary bird/no-bird (freefield1010/warblrb10k/PolandNFC). E1 ground: BirdNET inventory sanity (not species accuracy). CLAP weights CC0 no-auth.
 - 🔄 Track B cluster: Workflow `wnnu2ccnb` (paths+creds → yadisk/datasets/images in tmux)
-- 🔄 Track C reorg: Workflow `wxp03hm4t` (single Opus agent in ../faun-wt/reorg, self-verifies gates, commits chore/reorg). Main merges after.
-- Awaiting completion notifications. Reorg gates merging of all Phase-2 waves.
+- ✅ Track C reorg DONE: commit a0ec4d1 on chore/reorg, all 5 gates green (verified independently by main: 44 passed, imports OK, grep rc=1, 0 deletions, 269≥254 files). MERGED to main `521b9b7` (--no-ff), pushed, **CI SUCCESS**. Note: edge keras v7 was tracked → moved to legacy/edge/audio/ (correct). Business docs were untracked → handled by main (below).
+- ✅ Business docs committed by main on main `2502323`: new_context/new_info/ФАВН.pdf/cloud/Расчеты.pdf → docs/business/{smeta,meetings,hackathon,strategy}; tasks/ working docs + .mcp.json (no secrets) tracked; .claude local state gitignored. Working tree CLEAN.
+- 🔄 Track B cluster: Workflow `wnnu2ccnb` still running (yadisk/datasets/images in tmux).
+
+## Phase 2 — code waves launched (4 worktrees from main 2502323, disjoint paths)
+- 🔄 W1 core `wcj4ouiwc` → ../faun-wt/core (feat/pipeline-core): ingest+ordering(Opus) ‖ segmentation+jobs(Fable) ‖ output+storage(Opus) → verify agent
+- 🔄 W2 apiui `wi1z47lcu` → ../faun-wt/apiui (feat/pipeline-api-ui): api+cli(Opus) → UI ui-designer+Playwright → verify. Integration seam: api.run_pipeline() lazy-imports; tests patch it.
+- 🔄 W3 adapters `wkptoimtl` → ../faun-wt/adapters (feat/classifier-adapters): BirdNET/YAMNet/Perch lazy adapters + PEP562 reexports (Opus) → verify
+- 🔄 W4 expcode `wbhi4rr1w` → ../faun-wt/exp (feat/ml-experiments): runner+wrappers(Fable) ‖ exp_e1..e10(Opus) → rsync to cluster:/home/oleg/faun-data/code/ + v7 weights scp
+- W5 experiments-run: waits for Track B images+datasets AND W4 rsync.
+- Merge order (Phase 5): core→apiui→adapters→exp, pytest in worktree before each, green CI after each.
 
 ## Phase 3 — ingress VERIFIED ✅ (done inline by main while Phase 1 runs)
 - anchor nginx = `delphi-press-nginx-1` (nginx:1.27-alpine).
