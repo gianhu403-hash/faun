@@ -1,57 +1,28 @@
 name: Deploy
 
-on:
-  push:
-    branches: [main]
+# Auto-deploy DISABLED 2026-06-11.
+#
+# The old target VPS (delphi-press / 213.165.220.144) was physically deleted
+# 2026-05-30. Faun now runs on the cluster-alex node, fronted by the `anchor`
+# nginx ingress (faun.antopkin.ru -> tailnet 100.64.0.1:8003).
+#
+# GitHub Actions runners cannot reach the tailnet, so push-to-deploy is not
+# wired here. Deploy is manual on the cluster for now; CI/CD-to-cluster
+# (self-hosted runner or ssh-jump) is a July task. See docs/deployment.md.
+#
+# Trigger is workflow_dispatch only so a push to main never spawns a (failing)
+# deploy run.
 
-concurrency:
-  group: deploy-faun-production
-  cancel-in-progress: false
+on:
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  noop:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
     steps:
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1 (SHA-pinned)
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            set -e
-            cd ~/apps/faun
-            git pull origin main
-            docker compose -p faun up -d --build
-            docker compose -p faun ps
-            # Cleanup — shared VPS, не трогаем соседей
-            docker image prune -f
-            docker builder prune -f --filter until=24h
-            docker container prune -f --filter "label=com.docker.compose.project=faun" --filter "until=24h"
-            # Keep last 3 builds per faun-* image (currently 3 services, this is preventive)
-            docker images "faun-*" --format '{{.ID}} {{.CreatedAt}}' | sort -k2 | head -n -3 | awk '{print $1}' | xargs -r docker rmi 2>/dev/null || true
-            # Snapshot for trend monitoring — visible at end of this step's deploy log
-            echo
-            echo "=== Post-deploy docker system df ==="
-            docker system df
-            # ---- Post-deploy smoke (FAUN-37c) ----
-            # Catches the silent-503 regression class. cloud lifespan can take
-            # 30-60s (YDB conn + bot startup + seed mics) — poll /health up to 90s
-            # before checking auth gates.
-            echo "smoke: waiting for /health..."
-            HEALTH="000"
-            for i in $(seq 1 30); do
-              HEALTH=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8002/health 2>/dev/null || echo "000")
-              [ "$HEALTH" = "200" ] && { echo "smoke: /health up after ${i}s"; break; }
-              sleep 3
-            done
-            test "$HEALTH" = "200" || { echo "FAIL health (got $HEALTH after 90s)"; exit 1; }
-            MUTE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' http://127.0.0.1:8002/api/v1/demo -d '{}')
-            READ=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8002/api/v1/mics)
-            echo "smoke: health=$HEALTH mutate=$MUTE read=$READ"
-            # 403 = require_api_key wired AND FAUN_API_KEY env set; 503 = env missing.
-            test "$MUTE" = "403" || { echo "FAIL mutate (expect 403, got $MUTE — FAUN_API_KEY env missing on VPS?)"; exit 1; }
-            test "$READ" = "200" || { echo "FAIL read (got $READ)"; exit 1; }
+      - name: Deploy moved to cluster
+        run: |
+          echo "Auto-deploy is disabled. Faun runs on cluster-alex (tailnet)."
+          echo "Ingress: faun.antopkin.ru -> anchor nginx -> 100.64.0.1:8003."
+          echo "Manual deploy on cluster; CI/CD-to-cluster is a July task."
+          echo "See docs/deployment.md."
