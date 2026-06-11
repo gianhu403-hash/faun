@@ -74,11 +74,16 @@ def _load_yamnet_class_names():
         import csv, io, urllib.request
 
         url = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
-        resp = urllib.request.urlopen(url)
+        resp = urllib.request.urlopen(url, timeout=30)
         reader = csv.reader(io.StringIO(resp.read().decode()))
         next(reader)
         _yamnet_class_names = [row[2] for row in reader]
     except Exception:
+        logger.warning(
+            "yamnet class map download failed; base-class mapping degrades "
+            "to unknown/background",
+            exc_info=True,
+        )
         _yamnet_class_names = []
     return _yamnet_class_names
 

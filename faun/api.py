@@ -62,9 +62,12 @@ def read_manifest(job_dir: Path) -> Optional[dict]:
 
 
 def write_manifest(job_dir: Path, manifest: dict) -> None:
-    _manifest_path(job_dir).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # Atomic write (tmp + replace): GET /jobs/{id} polls concurrently with the
+    # background task, a plain truncate+write would let it read torn JSON.
+    path = _manifest_path(job_dir)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def update_manifest(job_dir: Path, **changes) -> dict:
@@ -109,11 +112,16 @@ def run_pipeline(
     # ingest: scan(path) -> Manifest of AudioFileEntry; stable trap/time order
     manifest = ordering.sort_entries(ingest.scan(Path(source_path)))
 
+    # Sidecar provenance: only claim a trap_id/coords when the batch is
+    # single-trap; a mixed batch gets "multi" and no coordinates (honest
+    # rather than first-entry's identity stamped onto everyone's rows).
+    trap_ids = {e.trap_id for e in manifest.entries}
     first = manifest.entries[0] if manifest.entries else None
+    single = len(trap_ids) == 1 and first is not None
     meta = output.TrapMeta(
-        trap_id=first.trap_id if first else "",
-        lat=lat if lat is not None else (first.lat if first else None),
-        lon=lon if lon is not None else (first.lon if first else None),
+        trap_id=(first.trap_id if single else ("multi" if trap_ids else "")),
+        lat=lat if lat is not None else (first.lat if single else None),
+        lon=lon if lon is not None else (first.lon if single else None),
         files=[e.path.name for e in manifest.entries],
     )
 
