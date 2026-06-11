@@ -17,11 +17,12 @@
 Пакет `faun/`:
 - `faun/ingest` — скан папок ловушек + `info.txt` → Manifest (одна папка = одна ловушка A1..A5).
 - `faun/ordering` — хронологическое упорядочивание записей манифеста.
-- `faun/segmentation` — `SegmentExtractor`: downmix mono + resample 48k→16k → onset-детектор (`faun/ml/onset.py`).
-- `faun/classification` — протокол `SpeciesClassifier` + адаптеры:
-  - `StubAdapter` (в скелете), `BirdNETAdapter`, `PerchAdapter`,
+- `faun/ordering` — хронологическая сортировка + детект пропусков цикла записи (10 мин + 1 мин паузы).
+- `faun/segmentation` — `SegmentExtractor`: downmix mono + resample (`soxr`) 48k→16k → onset-детектор (`faun/ml/onset.py`).
+- `faun/classification` — протокол `SpeciesClassifier` + адаптеры (ленивый импорт тяжёлых либ):
+  - `StubAdapter` (в скелете, без ML), `BirdNETAdapter` (CC BY-NC-SA, non-commercial), `PerchAdapter` (Apache 2.0, Perch 2 — продуктовый),
   - `YAMNetAdapter` (embeddings + probe, НЕ хакатонная YAMNet-голова).
-- `faun/output` — `CsvWriter`, колонки CSV: `track,start_sec,duration_sec,species,probability` (+ sidecar с метаданными ловушки).
+- `faun/output` — `CsvWriter`, колонки CSV: `track,start_sec,duration_sec,species,probability` (+ sidecar `results_meta.json` с метаданными ловушки).
 - `faun/jobs` — изоляция батчей: namespace на `job_id`, `workdir=jobs_root/<job_id>/`, без общих temp-путей.
 - `faun/storage` — протокол `Storage` + только `LocalFSStorage` (S3 — задача на июль, НЕ сейчас).
 - `faun/api` — FastAPI: `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/results.csv`.
@@ -33,10 +34,13 @@
 
 ## Вычислитель
 
-Кластер **cluster-alex** (RTX 2060S 8GB). TF/JAX в CI и локально — **CPU-only**
-(GPU только на кластере). Веса `faun/ml/yamnet_forest_classifier_v7.keras`
+Кластер **cluster-alex** (RTX 2060 SUPER 8GB, CUDA 13). TF/JAX без сборки под
+cu130 — **CPU-only** на кластере и в CI; GPU доступен через PyTorch-стек.
+Docker-образы на кластере: `faun-ml-cpu`, `faun-ml-torch`; данные —
+`/home/oleg/faun-data/`. Веса `faun/ml/yamnet_forest_classifier_v7.keras`
 (~6.4 MB) в `.gitignore` — раскладываются на кластер вручную, TF импортируется
-лениво внутри функций `faun/ml/yamnet.py`.
+лениво внутри функций `faun/ml/yamnet.py`. Бенчмарки моделей — `experiments/`
+(`python -m experiments.runner`, эксперименты E0..E5, E10).
 
 ## Legacy
 
@@ -51,9 +55,14 @@ real-time мониторинг, YAMNet-голова, TDOA-триангуляци
 
 ## Инфраструктура
 
-- Ingress: `faun.antopkin.ru` → nginx `anchor` → кластер cluster-alex.
+- Ingress: `faun.antopkin.ru` → nginx `anchor` → tailnet `100.64.0.1:8003`
+  (замороженное демо v1-hackathon на кластере, НЕ v2-pipeline).
+- Авто-деплой ОТКЛЮЧЁН: старый VPS (`213.165.220.144`, delphi-press) удалён
+  2026-05-30; `deploy.yml` — заглушка `workflow_dispatch`. CI/CD на кластер —
+  июльская задача (GHA-раннеры не видят tailnet).
 - **Forgejo на кластере НЕ трогать** — работаем только с GitHub.
-- Ветка для коммитов: `main`. CI: `.github/workflows/ci.yml` (deploy.yml — заглушка).
+- Ветка для коммитов: `main`. CI: `.github/workflows/ci.yml` (`pytest tests/`,
+  `bandit faun`, `pip-audit`; `legacy/tests/` не гоняется).
 
 ## Инструкции
 

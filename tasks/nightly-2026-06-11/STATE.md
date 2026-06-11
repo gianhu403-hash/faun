@@ -28,7 +28,9 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 - ✅ W3 **MERGED 6443700** after W2 (order kept); merged-main suite 177 passed locally.
 - ✅ **Phase-5 e2e smokes done EARLY by main on merged main:** CLI smoke caught real seam drift (api.run_pipeline vs W1 CsvWriter/AudioFileEntry APIs) → fixed in api.py by main (commit "fix(api): align run_pipeline with real W1 module APIs", pushed). CLI: synthetic 48k trap dir → CSV (A1, 2.23s, StubAdapter preds) ✅. API e2e with real chain: POST→done(progress 1.0)→CSV→UI 200 ✅. Suite 177 passed.
 - ✅ W3 adapters DONE: 67 passed, lazy-import gate verified (no TF/birdnetlib pulled on import); committed+pushed feat/classifier-adapters. HOLD merge until W2 lands (order core→apiui→adapters). NB: birdnetlib/Perch API signatures are assumed (mocked tests) — live integration check is in W5/E-experiments.
-- 🔄 W4 expcode `wbhi4rr1w` → ../faun-wt/exp (feat/ml-experiments): runner+wrappers(Fable) ‖ exp_e1..e10(Opus) → rsync to cluster:/home/oleg/faun-data/code/ + v7 weights scp
+- ✅ W4 expcode DONE: runner+wrappers+exp_e0..e10, 8 smoke tests; code rsynced to cluster:/home/oleg/faun-data/code/ (smoke_ok). Committed ba3b1db, **MERGED f8c2561** (resolved .gitignore conflict W2 jobs/ vs W4 experiments/), suite 177 passed, pushed. **ALL FOUR WAVES MERGED.** Stub-tested only — real numbers from cluster run.
+- 🔄 Phase 6 docs agent launched in background (README/docs/pipeline.md/docs/deployment.md/CLAUDE.md proofread; main worktree, no-commit — main commits).
+- Cluster live status 08:55: yadisk 500/1655 files 56G zero-fail; datasets dcase_bad downloading (1.5G total); images STILL BUILDING; **creds all NO (kaggle/hf/xeno-canto)** → E10 skips, Perch via TFHub v1 no-auth.
 - W5 experiments-run: waits for Track B images+datasets AND W4 rsync.
 - Merge order (Phase 5): core→apiui→adapters→exp, pytest in worktree before each, green CI after each.
 

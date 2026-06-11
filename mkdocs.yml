@@ -1,5 +1,5 @@
-site_name: "Faun — Акустический мониторинг леса"
-site_description: "Техническая документация системы Faun: AI-мониторинг лесных нарушений"
+site_name: "Faun — распознавание видов птиц с аудиоловушек"
+site_description: "Техническая документация Faun v2: офлайн batch-pipeline распознавания видов птиц"
 site_url: "https://faun-forrest.duckdns.org:8080"
 
 theme:
@@ -36,14 +36,16 @@ repo_url: "https://github.com/gianhu403-hash/faun"
 
 nav:
   - Главная: index.md
-  - Архитектура: architecture.md
-  - ML Pipeline: ml-pipeline.md
-  - API Reference: api.md
-  - База данных: database.md
-  - Telegram-бот: telegram-bot.md
-  - Yandex Cloud: yandex-cloud.md
+  - Pipeline (v2): pipeline.md
   - Деплой: deployment.md
-  - Тестирование: testing.md
+  - "Legacy v1-hackathon":
+    - Архитектура: architecture.md
+    - ML Pipeline: ml-pipeline.md
+    - API Reference: api.md
+    - База данных: database.md
+    - Telegram-бот: telegram-bot.md
+    - Yandex Cloud: yandex-cloud.md
+    - Тестирование: testing.md
   - Правовая база:
     - legal/README.md
     - Лесной кодекс РФ: legal/01a_lesnoy_kodeks_relevantye_glavy.md

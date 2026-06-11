@@ -1,197 +1,87 @@
-# Деплой
+# Деплой и инфраструктура
 
-## Docker Compose
+## Текущее состояние
 
-Система запускается через `docker compose` с тремя сервисами:
+- **Faun v2 (pipeline)** — пока без авто-деплоя. Запускается локально или на
+  кластере вручную (см. ниже). Веб-эндпоинт пилота — июльская задача.
+- **Замороженное демо v1-hackathon** продолжает крутиться на кластере и
+  доступно через <https://faun.antopkin.ru>. Ingress:
+  `anchor` nginx → tailnet `100.64.0.1:8003`. Это демо хакатонного контура
+  (real-time мониторинг, TDOA, LoRa, Telegram, дрон, RAG), не v2-pipeline.
+- **Авто-деплой ОТКЛЮЧЁН.** Старый VPS (`213.165.220.144`, shared
+  `delphi-press`) удалён **2026-05-30** — больше не существует, упоминания о нём
+  в истории помечены как удалённый хост. `.github/workflows/deploy.yml` —
+  заглушка `workflow_dispatch` (ручной триггер, ничего не деплоит): GHA-раннеры
+  не видят tailnet кластера, поэтому автоматический pull на кластер невозможен
+  до настройки self-hosted runner / ssh-jump (июль).
+- **CI** работает: `.github/workflows/ci.yml` гоняет `pytest tests/`,
+  `bandit faun`, `pip-audit`. CI гоняет только каталог `tests/`; `legacy/tests/`
+  игнорируется.
 
-```yaml
-services:
-  cloud:       # FastAPI + Telegram-бот + AI-агенты
-  edge:        # YAMNet classifier + TDOA + Decision engine
-  lora_gateway: # LoRa mesh relay
-```
+## Вычислитель: cluster-alex
 
-### Сервисы
+| Параметр       | Значение                                             |
+|----------------|------------------------------------------------------|
+| GPU            | RTX 2060 SUPER, 8 GB                                  |
+| CUDA           | 13                                                    |
+| TF / JAX       | без сборки под cu130 → **CPU-only**                   |
+| PyTorch-стек   | использует GPU                                        |
+| Каталог данных | `/home/oleg/faun-data/` (`FAUN_DATA_ROOT`)           |
+| Docker-образы  | `faun-ml-cpu`, `faun-ml-torch`                        |
 
-| Сервис | Порт | Healthcheck | Зависимости |
-|--------|------|-------------|-------------|
-| **cloud** | `:8000` | `curl /health` (120s interval, 10s timeout, 3 retries, 360s start period) | `lora_gateway` |
-| **edge** | `:8001` | — | — |
-| **lora_gateway** | `:9000` | — | — |
+`faun-ml-cpu` — лёгкий контур (TF/JAX CPU-only), `faun-ml-torch` — PyTorch с GPU
+для тяжёлых моделей (Perch, эксперименты).
 
-**Edge** запускается командой: `sh -c "python demo/generate_audio.py && python -m edge.server"` — сначала скачивает/генерирует демо-аудио, затем запускает основной pipeline.
+## Запуск pipeline
 
-### Volumes
-
-- `.:/app` — монтирование кода (cloud и edge)
-- `yamnet_cache:/tmp/yamnet_cache` — общий named volume для кэша модели YAMNet (shared между cloud и edge)
-
-Все сервисы используют политику `restart: unless-stopped`.
-
----
-
-## Dockerfile
-
-```dockerfile
-FROM python:3.11-slim
-
-# Системные зависимости
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsndfile1 libsndfile1-dev ffmpeg curl \
-    fonts-dejavu-core build-essential \
-    texlive-luatex texlive-latex-extra texlive-lang-cyrillic \
-    fonts-paratype
-
-# Python зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir --retries 5 --timeout 60 -r requirements.txt
-
-# Валидация SDK
-RUN python -c "from yandex_ai_studio_sdk import AIStudio; print('SDK OK')"
-
-# Рабочие директории
-RUN mkdir -p demo/audio demo/photos /tmp/yamnet_cache
-
-EXPOSE 8000
-CMD ["uvicorn", "cloud.interface.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-**Base image:** Python 3.11-slim
-**Системные пакеты:** libsndfile (аудио I/O), ffmpeg (конвертация), curl (healthcheck), texlive + fonts-paratype (PDF-протоколы на LaTeX)
-
----
-
-## VPS-сервер
-
-| Параметр | Значение |
-|----------|---------|
-| Хост | `213.165.220.144` (shared VPS `delphi-press`) |
-| SSH | `ssh deploy@213.165.220.144` |
-| Код | `~/apps/faun`, ветка `main` |
-| Дашборд | https://faun.antopkin.ru/ |
-| Порты | cloud :8002 (→8000), edge :8003 (→8001), lora_gateway :9000 |
-| ОС | Debian 12, 7.8 GB RAM |
-| Модель | YAMNet v7 загружена и кэширована |
-
----
-
-## Переменные окружения
-
-### Обязательные
-
-| Переменная | Описание |
-|------------|---------|
-| `TELEGRAM_BOT_TOKEN` | Токен Ranger Bot (`@ya_faun_bot`) |
-| `TELEGRAM_DRONE_BOT_TOKEN` | Токен Drone Bot (приём фото для Vision) |
-| `YANDEX_API_KEY` | API-ключ Yandex Cloud |
-| `YANDEX_FOLDER_ID` | ID каталога Yandex Cloud (`b1g5lqh1mqg84cabtejb`) |
-
-### AI Studio / RAG
-
-| Переменная | Описание |
-|------------|---------|
-| `SEARCH_INDEX_ID` | ID индекса File Search (`fvttk7bjvnm39qogtoep`) |
-| `DATASPHERE_NODE_ID` | ID ноды DataSphere для cloud inference |
-
-### YDB Serverless (опционально)
-
-| Переменная | Значение по умолчанию |
-|------------|----------------------|
-| `YDB_ENDPOINT` | `grpcs://ydb.serverless.yandexcloud.net:2135` |
-| `YDB_DATABASE` | `/ru-central1/b1g.../etn...` |
-| `YDB_SA_KEY_FILE` | `/app/sa-key.json` |
-
-### Опциональные
-
-| Переменная | По умолчанию | Описание |
-|------------|-------------|---------|
-| `ALERT_COOLDOWN_SECONDS` | `300` | Кулдаун между алертами одного типа |
-| `CLOUD_API_URL` | `http://cloud:8000` | URL cloud-сервиса для edge |
-| `LORA_GATEWAY_HOST` | `lora_gateway` | Хост LoRa gateway |
-| `LORA_GATEWAY_PORT` | `9000` | Порт LoRa gateway |
-| `EDGE_CLASSIFY_URL` | `http://edge:8001/api/v1/classify` | URL edge classify API |
-| `MIC_MODE` | `sim` | Режим микрофонов (`sim` / `real` / `real_3`) |
-| `DEMO_SCENARIO` | `chainsaw` | Демо-сценарий |
-| `DISABLE_AUTO_DEMO` | — | Если установлена — отключает auto-demo при старте |
-| `ADMIN_CHAT_IDS` | — | Comma-separated Telegram chat IDs для команды /rangers |
-| `QUIET_HOURS_START` | `22` | Начало тихого времени (МСК) |
-| `QUIET_HOURS_END` | `6` | Конец тихого времени (МСК) |
-| `RAG_SDK_TIMEOUT` | `15` | Timeout для SDK Assistants API (секунды) |
-
-### Координаты микрофонов (Варнавино, fallback)
-
-| Переменная | Значение |
-|------------|---------|
-| `MIC_A_LAT` / `MIC_A_LON` | `57.3697` / `44.6200` |
-| `MIC_B_LAT` / `MIC_B_LON` | `57.3752` / `44.6345` |
-| `MIC_C_LAT` / `MIC_C_LON` | `57.3631` / `44.6489` |
-
-Используются только если в БД менее 3 онлайн-микрофонов.
-
----
-
-## Команды деплоя
+### Локально
 
 ```bash
-# Автоматический: push to main → GHA deploy
-# Ручной:
-ssh deploy@213.165.220.144
-cd ~/apps/faun
-git pull && docker compose -p faun up -d --build
+pip install -r requirements-pipeline.txt
+
+# CLI
+python -m faun.cli process <dir> --out results.csv
+
+# API + UI
+uvicorn faun.api:app --reload   # UI на http://127.0.0.1:8000/
 ```
 
-## Post-deploy checklist
+`requirements-pipeline.txt` намеренно лёгкий (fastapi, uvicorn, numpy,
+soundfile, soxr, pydantic, aiofiles, httpx) — **без tensorflow**: тяжёлые модели
+тянутся лениво только внутри адаптеров классификации.
 
-1. **Контейнеры пересобрались**: `docker compose -p faun ps` — CREATED свежая
-2. **Health**: `curl -s https://faun.antopkin.ru/health` → `{"status":"ok"}`
-3. **nginx → faun сеть**: `docker network connect faun_net delphi-press-nginx-1` (не персистится!)
-4. **Карта + WebSocket**: https://faun.antopkin.ru/ — карта с микрофонами, статус "OK"
+### На кластере
 
-## CSP (Content-Security-Policy)
+Запуск в одном из ML-образов с примонтированными данными:
 
-Faun имеет **отдельный** CSP-файл: `~/apps/delphi-press/nginx/faun-security-headers.conf`.
-Общий `security-headers.conf` — для delphi-press, НЕ трогать.
+```bash
+# pipeline (CPU-стек достаточно для ingest/segmentation/stub)
+docker run --rm -v /home/oleg/faun-data:/data faun-ml-cpu \
+    python -m faun.cli process /data/<trap_dir> --out /data/results.csv
 
-При добавлении новых внешних ресурсов в frontend — обновить CSP на VPS:
-
-| Директива | Текущие домены | Когда обновлять |
-|-----------|---------------|-----------------|
-| `script-src` | `unpkg.com`, `cdn.jsdelivr.net` | Новый JS CDN |
-| `style-src` | `unpkg.com`, `fonts.googleapis.com`, `cdn.jsdelivr.net` | Новый CSS CDN |
-| `img-src` | `*.basemaps.cartocdn.com` | Смена тайл-провайдера |
-| `connect-src` | `wss://faun.antopkin.ru` | Новые WebSocket/API домены |
-| `frame-src` | `datalens.yandex` | Новые iframe-источники |
-
-После изменения: `docker exec delphi-press-nginx-1 nginx -s reload`
-
----
-
-## YDB Setup
-
-Для использования YDB Serverless вместо SQLite:
-
-1. Создать сервисный аккаунт в Yandex Cloud
-2. Скачать ключ (`sa-key.json`) и положить в `/app/sa-key.json`
-3. Установить переменные `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_SA_KEY_FILE`
-4. Таблицы создаются автоматически при первом запуске (см. [База данных](database.md))
-
----
-
-## Nginx (документация)
-
-Для хостинга MkDocs-документации через nginx:
-
-```nginx
-server {
-    listen 8080;
-    server_name faun-forrest.duckdns.org;
-    root /var/www/ya_hve/site;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
+# тяжёлые адаптеры / эксперименты (GPU)
+docker run --rm --gpus all -v /home/oleg/faun-data:/data faun-ml-torch \
+    python -m experiments.runner --all --data-root /data
 ```
 
-Сборка: `mkdocs build` создаёт статику в `site/`.
+Эксперименты и работа с данными на кластере подробнее — в
+[`pipeline.md`](pipeline.md#эксперименты-на-кластере).
+
+## July roadmap
+
+- **CI/CD на кластер** — self-hosted GHA runner внутри tailnet (или ssh-jump),
+  чтобы push в `main` доезжал до cluster-alex. Сейчас GHA-раннеры tailnet не
+  видят.
+- **S3 / Object Storage** — реализация `S3Storage` против протокола
+  `faun/storage.Storage` (сейчас только `LocalFSStorage`).
+- **Веб-эндпоинт пилота** — публичный доступ к v2-API для оператора (поверх
+  существующего FastAPI + UI на `/`).
+
+## История (удалённая инфраструктура)
+
+Старый продакшен v1 жил на shared VPS `delphi-press` (`213.165.220.144`,
+Debian 12). **Хост удалён 2026-05-30.** Авто-деплой туда (push → GHA → ssh →
+`docker compose -p faun up -d --build`), CSP-конфиги
+(`faun-security-headers.conf`), nginx-проброс — всё относилось к этому VPS и
+больше не действует. Здесь оставлено только как контекст истории, не как рабочая
+инструкция.
