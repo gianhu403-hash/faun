@@ -1,0 +1,9 @@
+model,dataset,metric,value,runtime_s,vram_mb,notes
+E3,,status,skip,86.0,3728,"no CLAP votes; A-only review PNGs in e3_windows/ (M=30, coverage_A=1.00, source=raw180)"
+E3,,status,skip,57.7,3728,"no CLAP votes; A-only review PNGs in e3_windows/ (M=30, coverage_A=1.00, source=raw180)"
+onset+ndsi_vs_CLAP,raw180,agreement_rate,0.4667,61.2,3988,"M=30/30 paired source=raw180 matrix(A_rows,B_cols)=[[0, 0], [16, 14]] coverage_A=1.00 coverage_B=0.47; review PNGs in e3_windows/"
+BirdNET+Perch_gallery,raw180,files_rendered,16,308.6,,rendered=16 missing=['A5'] denoise=quiet-floor birdnet=on perch=on; gallery=e4_gallery/gallery.md
+E1,,status,skip,0.2,,no labelled bird-detection dataset under datasets/ (freefield1010|warblrb10k)
+E2,,status,skip,0.2,,no labelled bird-detection dataset under datasets/
+E5,,status,skip,0.2,,no labelled bird-detection dataset under datasets/
+E10,,status,skip,0.2,,no xeno-canto / special-species data (expected: needs xeno-canto key/download not present in nightly run)
