@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "plane-consulting": {
+      "type": "stdio",
+      "command": "sh",
+      "args": [
+        "-c",
+        "set -a; [ -f .env ] && . ./.env; set +a; exec uvx plane-mcp-server stdio"
+      ],
+      "env": {
+        "PLANE_WORKSPACE_SLUG": "consulting",
+        "PLANE_BASE_URL": "https://tasks.antopkin.ru"
+      }
+    }
+  }
+}

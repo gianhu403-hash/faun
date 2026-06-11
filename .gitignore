@@ -33,3 +33,7 @@ demo/sounds/
 
 # MkDocs build output
 site/
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
