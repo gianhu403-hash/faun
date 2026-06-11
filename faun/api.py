@@ -94,7 +94,9 @@ def run_pipeline(
 
     Tests patch this function — they do NOT call the real chain.
     """
-    from faun import ingest, output, segmentation
+    import soundfile as sf
+
+    from faun import ingest, ordering, output, segmentation
     from faun.classification import StubAdapter
 
     if classifier is None:
@@ -104,26 +106,33 @@ def run_pipeline(
     job_dir.mkdir(parents=True, exist_ok=True)
     results_path = job_dir / RESULTS_CSV
 
-    # ingest: scan(path) -> Manifest of AudioFileEntry
-    manifest = ingest.scan(Path(source_path))
+    # ingest: scan(path) -> Manifest of AudioFileEntry; stable trap/time order
+    manifest = ordering.sort_entries(ingest.scan(Path(source_path)))
+
+    first = manifest.entries[0] if manifest.entries else None
+    meta = output.TrapMeta(
+        trap_id=first.trap_id if first else "",
+        lat=lat if lat is not None else (first.lat if first else None),
+        lon=lon if lon is not None else (first.lon if first else None),
+        files=[e.path.name for e in manifest.entries],
+    )
 
     extractor = segmentation.SegmentExtractor()
-    writer = output.CsvWriter(results_path)
+    with output.CsvWriter().open(results_path, meta=meta) as writer:
+        for entry in manifest.entries:
+            waveform, sr = sf.read(entry.path, dtype="float64", always_2d=False)
+            for segment in extractor.extract(waveform, sr):
+                for pred in classifier.classify(segment, sr):
+                    writer.write_row(
+                        {
+                            "track": entry.trap_id,
+                            "start_sec": segment.start_s,
+                            "duration_sec": segment.duration_s,
+                            "species": pred.species,
+                            "probability": pred.probability,
+                        }
+                    )
 
-    for entry in manifest.entries:
-        waveform, sr = entry.load() if hasattr(entry, "load") else (None, entry.sr)
-        for segment in extractor.extract(waveform, sr):
-            predictions = classifier.classify(segment, sr)
-            for pred in predictions:
-                writer.write_row(
-                    track=entry.trap_id,
-                    start_sec=segment.start_s,
-                    duration_sec=segment.duration_s,
-                    species=pred.species,
-                    probability=pred.probability,
-                )
-
-    writer.close()
     return results_path
 
 
