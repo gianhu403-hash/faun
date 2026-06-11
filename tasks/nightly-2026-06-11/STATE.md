@@ -62,8 +62,9 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 - ✅ Phase 8: REPORT.md написан; bench CSV + experiment-log обновлены ESC-50-строками. NIGHT COMPLETE.
 
 ## Tail (после «работай автономно, доведи до конца», ~10:35)
-- 🔄 Tail A cluster `wv98l6p3f`: rebuild faun-ml-cpu (+tensorflow_hub/tf-keras/setuptools<81), unzip ff1010 (zip ГОТОВ 5.4G; warblr качается), затем E1→E2→E5 последовательно.
-- 🔄 Tail B repo-агент: унификация api job-store на faun.jobs (контракт API неизменен, тесты без ослабления), UI poll-on-error, UI CSV-парсер с кавычками. Гейт: вся сюита зелёная + живой e2e.
+- ✅ Tail A cluster DONE: faun-ml-cpu пересобран (hub-ok гейт); ff1010 распакован (7690 WAV); **E1 BirdNET 0.672 / E2 Perch 0.905 / E5 YAMNet-base 0.860 (roc_auc, ff1010, N=400)**. Гоча: birdnetlib требует resampy → /data/pylibs (в Dockerfile при следующей пересборке). warblr ещё качался.
+- ✅ Tail B repo DONE: api на faun.jobs (контракт сохранён, 181 passed, живой e2e), UI poll-fail-counter + CSV-парсер. Коммит 35f03e0.
+- ✅ Финал: results.csv+bench обновлены ff1010-строками, experiment-log/REPORT дописаны. **ALL COMPLETE.**
 - ✅ exp_esc50_probe.py перенесён с кластера в experiments/ (не закоммичен — уйдёт с tail-коммитом).
 - ✅ bench CSV решение: docs/results/bioacoustics_bench.csv = только реальные метрики; полный честный лог остаётся в experiments/report/results.csv.
 - ✅ Ветка docs/mkdocs-technical-documentation: заархивирована тегом archive/docs-mkdocs-technical-documentation (запушен), локальная ветка удалена. Контент сохранён.

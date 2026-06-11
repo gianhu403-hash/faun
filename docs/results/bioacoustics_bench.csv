@@ -3,3 +3,6 @@ onset+ndsi_vs_CLAP,raw180,agreement_rate,0.4667,61.2,3988,"M=30/30 paired source
 BirdNET+Perch_gallery,raw180,files_rendered,16,308.6,,rendered=16 missing=['A5'] denoise=quiet-floor birdnet=on perch=on; gallery=e4_gallery/gallery.md
 perch_v1_esc50,esc50_birds,roc_auc,0.9962,48.9,,N=240 dim=1280 5-fold-CV seed=1337 pos=40 neg=200 pos_rate=0.17 failures=0 task=chirping_birds_vs_rest; frozen emb + StdScaler+LogReg
 yamnet_base_esc50,esc50_birds,roc_auc,0.9969,11.7,,N=240 dim=2048 5-fold-CV seed=1337 pos=40 neg=200 pos_rate=0.17 failures=0 task=chirping_birds_vs_rest; frozen emb + StdScaler+LogReg
+BirdNET,ff1010bird,roc_auc,0.6719,96.9,,N=400 seed=1337 thr=0.1 precision=0.297 recall=0.859 pos_rate=0.25 failures=0; CC-BY-NC-SA inventory baseline
+Perch,ff1010bird,roc_auc,0.9049,87.4,,N=400 dim=1280 5-fold-CV win=5.0s seed=1337 pos_rate=0.25 failures=0; frozen embeddings + LogReg (Apache-2.0)
+YAMNet-base,ff1010bird,roc_auc,0.8603,26.7,,N=400 dim=2048 5-fold-CV seed=1337 pos_rate=0.25 failures=0; base AudioSet embeddings (no v7 head). Compare vs E2(Perch) to justify model swap
