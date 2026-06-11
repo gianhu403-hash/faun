@@ -60,6 +60,14 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 - ✅ Phase 4: experiments/report/{experiment-log.md(+Утренний вывод),research-report.md,final-audit.md,results.csv,e4_gallery.md,sample_gallery/} + docs/results/bioacoustics_bench.csv — закоммичено в main, suite 180 passed.
 - ✅ ESC-50 добор DONE: Perch v1 AUC **0.9962**, YAMNet-base **0.9969** (chirping_birds vs rest, N=240, 5-fold CV). Гоча: faun-ml-cpu без tensorflow_hub → воркэраунд /data/pylibs (tf_hub 0.16.1 + tf-keras + setuptools<81); к июлю пересобрать образ. Скрипт exp_esc50_probe.py на кластере.
 - ✅ Phase 8: REPORT.md написан; bench CSV + experiment-log обновлены ESC-50-строками. NIGHT COMPLETE.
+
+## Tail (после «работай автономно, доведи до конца», ~10:35)
+- 🔄 Tail A cluster `wv98l6p3f`: rebuild faun-ml-cpu (+tensorflow_hub/tf-keras/setuptools<81), unzip ff1010 (zip ГОТОВ 5.4G; warblr качается), затем E1→E2→E5 последовательно.
+- 🔄 Tail B repo-агент: унификация api job-store на faun.jobs (контракт API неизменен, тесты без ослабления), UI poll-on-error, UI CSV-парсер с кавычками. Гейт: вся сюита зелёная + живой e2e.
+- ✅ exp_esc50_probe.py перенесён с кластера в experiments/ (не закоммичен — уйдёт с tail-коммитом).
+- ✅ bench CSV решение: docs/results/bioacoustics_bench.csv = только реальные метрики; полный честный лог остаётся в experiments/report/results.csv.
+- ✅ Ветка docs/mkdocs-technical-documentation: заархивирована тегом archive/docs-mkdocs-technical-documentation (запушен), локальная ветка удалена. Контент сохранён.
+- После обоих хвостов: обновить experiment-log/REPORT/bench строками E1/E2/E5, закоммитить, финальные гейты.
 - ✅ Phase 7: worktrees удалены (все 5); local merged ветки удалены; origin почищен — остался ТОЛЬКО main (старые fix/FAUN-* оказались stale-refs, давно удалёнными на GitHub; fetch -p подтвердил). Локально осталась docs/mkdocs-technical-documentation (НЕ смерженная, upstream gone) — НЕ удалена, в отчёт. Гейты: status clean=0, tag на origin, CI success.
 
 ## Decisions / deviations log

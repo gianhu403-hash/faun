@@ -9,15 +9,15 @@ faun.segmentation, faun.classification, faun.output) inside its body, against
 the frozen signatures in faun/INTERFACES.md, and runs the chain. Tests patch
 ``run_pipeline`` so the real (stub) chain is never exercised.
 
-Job management is file-based (manifest.json per job dir under FAUN_JOBS_ROOT);
-no module-level import of faun.jobs (it is a Phase-2 stub).
+Job management is delegated to faun.jobs (atomic manifest write via tmp+rename,
+pending -> running -> done|error lifecycle). The API keeps its public JSON shape
+by flattening the job's ``params`` (source_path, lat, lon, progress, results_csv,
+error) alongside the top-level ``job_id``/``status``.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -26,13 +26,14 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 
+from faun import jobs
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 RESULTS_CSV = "results.csv"
-MANIFEST = "manifest.json"
 
 
 def jobs_root() -> Path:
@@ -45,36 +46,18 @@ def jobs_root() -> Path:
     return root
 
 
-# ---------------------------------------------------------------------------
-# Manifest helpers (the minimal job store, file-based)
-# ---------------------------------------------------------------------------
+def _job_view(job: jobs.Job) -> dict:
+    """Flatten a Job into the public API response shape.
 
-
-def _manifest_path(job_dir: Path) -> Path:
-    return job_dir / MANIFEST
-
-
-def read_manifest(job_dir: Path) -> Optional[dict]:
-    path = _manifest_path(job_dir)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_manifest(job_dir: Path, manifest: dict) -> None:
-    # Atomic write (tmp + replace): GET /jobs/{id} polls concurrently with the
-    # background task, a plain truncate+write would let it read torn JSON.
-    path = _manifest_path(job_dir)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def update_manifest(job_dir: Path, **changes) -> dict:
-    manifest = read_manifest(job_dir) or {}
-    manifest.update(changes)
-    write_manifest(job_dir, manifest)
-    return manifest
+    Top-level ``job_id`` + ``status`` (from the Job) merged with the API-level
+    params (source_path, lat, lon, progress, results_csv, error). This keeps the
+    external JSON contract unchanged while the store lives in faun.jobs.
+    """
+    return {
+        "job_id": str(job.job_id),
+        "status": job.status,
+        **job.params,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -152,18 +135,18 @@ def run_pipeline(
 def _execute_job(
     job_id: str, source_path: str, lat: Optional[float], lon: Optional[float]
 ) -> None:
-    job_dir = jobs_root() / job_id
-    update_manifest(job_dir, status="running", progress=0.0)
+    root = jobs_root()
+    job = jobs.load_job(root, job_id)
+    job.params["progress"] = 0.0
+    jobs.update_status(job, "running")
     try:
-        results = run_pipeline(job_dir, source_path, lat, lon)
-        update_manifest(
-            job_dir,
-            status="done",
-            progress=1.0,
-            results_csv=str(Path(results).name),
-        )
+        results = run_pipeline(job.workdir, source_path, lat, lon)
+        job.params["progress"] = 1.0
+        job.params["results_csv"] = str(Path(results).name)
+        jobs.update_status(job, "done")
     except Exception as exc:  # noqa: BLE001 — surface any failure in manifest
-        update_manifest(job_dir, status="error", error=str(exc))
+        job.params["error"] = str(exc)
+        jobs.update_status(job, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -208,31 +191,27 @@ def index() -> HTMLResponse:
 
 @app.post("/jobs")
 def create_job(req: JobRequest, background_tasks: BackgroundTasks) -> dict:
-    job_id = str(uuid.uuid4())
-    job_dir = jobs_root() / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
-    write_manifest(
-        job_dir,
-        {
-            "job_id": job_id,
-            "status": "pending",
+    job = jobs.create_job(
+        jobs_root(),
+        params={
             "source_path": req.source,
             "lat": req.lat,
             "lon": req.lon,
             "progress": 0.0,
         },
     )
+    job_id = str(job.job_id)
     background_tasks.add_task(_execute_job, job_id, req.source, req.lat, req.lon)
     return {"job_id": job_id}
 
 
 @app.get("/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
-    job_dir = jobs_root() / job_id
-    manifest = read_manifest(job_dir)
-    if manifest is None:
+    try:
+        job = jobs.load_job(jobs_root(), job_id)
+    except (FileNotFoundError, ValueError):
         raise HTTPException(status_code=404, detail="job not found")
-    return manifest
+    return _job_view(job)
 
 
 @app.get("/jobs/{job_id}/results.csv")

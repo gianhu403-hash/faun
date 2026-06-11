@@ -110,3 +110,18 @@ def test_index_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Faun" in resp.text
+
+
+def test_store_is_faun_jobs(client, patched_pipeline, tmp_path):
+    """The API persists through faun.jobs: the manifest it writes must be a valid
+    faun.jobs Job (atomic store, single lifecycle), not a private api manifest."""
+    from faun import jobs
+
+    resp = client.post("/jobs", json={"source_path": "/data/A1"})
+    job_id = resp.json()["job_id"]
+
+    job = jobs.load_job(tmp_path / "jobs", job_id)
+    assert job.status == "done"
+    assert job.params["source_path"] == "/data/A1"
+    assert job.params["progress"] == 1.0
+    assert job.params["results_csv"] == "results.csv"

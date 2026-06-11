@@ -76,6 +76,26 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let pollTimer = null;
+let pollFails = 0;
+
+// Minimal CSV row parser: respects double-quoted fields (so a value with a
+// comma doesn't shift columns) and "" escaping. Display-only.
+function parseCsvRow(line) {
+  const out = [];
+  let cur = "", q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { q = false; }
+      } else { cur += c; }
+    } else if (c === '"') { q = true; }
+    else if (c === ",") { out.push(cur); cur = ""; }
+    else { cur += c; }
+  }
+  out.push(cur);
+  return out;
+}
 
 $("job-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -111,13 +131,36 @@ function startPolling(jobId) {
   $("run-err").classList.add("hidden");
 
   if (pollTimer) clearInterval(pollTimer);
+  pollFails = 0;
   pollTimer = setInterval(() => poll(jobId), 2000);
   poll(jobId);
 }
 
 async function poll(jobId) {
-  const res = await fetch(`/jobs/${jobId}`);
-  if (!res.ok) return;
+  let res;
+  try {
+    res = await fetch(`/jobs/${jobId}`);
+  } catch (err) {
+    res = null;  // network error — treat as a poll failure
+  }
+  if (!res || !res.ok) {
+    pollFails++;
+    const code = res ? res.status : "сеть";
+    if (pollFails >= 10) {
+      clearInterval(pollTimer);
+      $("run-err").textContent =
+        "Опрос остановлен после 10 неудач подряд (HTTP " + code + ").";
+      $("run-err").classList.remove("hidden");
+      $("submit-btn").disabled = false;
+    } else if (pollFails >= 3) {
+      $("run-err").textContent =
+        "Ошибка опроса (HTTP " + code + "), пробую ещё…";
+      $("run-err").classList.remove("hidden");
+    }
+    return;
+  }
+  pollFails = 0;
+  $("run-err").classList.add("hidden");
   const m = await res.json();
 
   const badge = $("badge");
@@ -149,7 +192,7 @@ async function loadResults(jobId) {
   const res = await fetch(url);
   if (!res.ok) return;
   const text = await res.text();
-  const rows = text.trim().split("\n").map((r) => r.split(","));
+  const rows = text.trim().split("\n").map(parseCsvRow);
   const body = $("results-body");
   body.innerHTML = "";
   rows.slice(1).forEach((cols) => {
