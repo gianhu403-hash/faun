@@ -54,5 +54,17 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 - Phase 3: pending
 - Phase 4-8: pending
 
+## Phase 2 W5 + Phase 4 + Phase 7 (final stretch)
+- ✅ W5 done: E3 agreement 0.467 (onset 30/30 vs CLAP 14/30, raw180, 30 review-PNG); E4 галерея 16 файлов A1–A4 (BirdNET-виды правдоподобны; Perch per-file n/a — graceful; A5 в корпусе НЕТ); E1/E2/E5 skip (ff1010 качался), E10 skip (нет xeno-canto). Хотфикс clap.py (transformers 5.x) сделан на кластере и бэкпортирован в репо.
+- ✅ 180 ГБ: DONE 1655/1655, 0 failed (09:55).
+- ✅ Phase 4: experiments/report/{experiment-log.md(+Утренний вывод),research-report.md,final-audit.md,results.csv,e4_gallery.md,sample_gallery/} + docs/results/bioacoustics_bench.csv — закоммичено в main, suite 180 passed.
+- ✅ ESC-50 добор DONE: Perch v1 AUC **0.9962**, YAMNet-base **0.9969** (chirping_birds vs rest, N=240, 5-fold CV). Гоча: faun-ml-cpu без tensorflow_hub → воркэраунд /data/pylibs (tf_hub 0.16.1 + tf-keras + setuptools<81); к июлю пересобрать образ. Скрипт exp_esc50_probe.py на кластере.
+- ✅ Phase 8: REPORT.md написан; bench CSV + experiment-log обновлены ESC-50-строками. NIGHT COMPLETE.
+- ✅ Phase 7: worktrees удалены (все 5); local merged ветки удалены; origin почищен — остался ТОЛЬКО main (старые fix/FAUN-* оказались stale-refs, давно удалёнными на GitHub; fetch -p подтвердил). Локально осталась docs/mkdocs-technical-documentation (НЕ смерженная, upstream gone) — НЕ удалена, в отчёт. Гейты: status clean=0, tag на origin, CI success.
+
 ## Decisions / deviations log
-- (none yet beyond gh-auth note above)
+- gh-auth: workflow scope уже был у gianhu403-hash — refresh не понадобился.
+- Phase 3 сделана инлайн в начале ночи (ingress здоров) — не отдельной волной.
+- Phase 5 смоуки сделаны сразу при мерджах (а не отдельной фазой) — поймали и починили шов api↔W1 рано.
+- E1/E2/E5 не удались по данным (медленный archive.org) — добор на ESC-50 запущен; перезапуск на ff1010 утром тривиален.
+- Реальная структура корпуса: A1–A4 + RECORDER + офис (не A1..A5).

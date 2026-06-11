@@ -7,3 +7,7 @@ E1,,status,skip,0.2,,no labelled bird-detection dataset under datasets/ (freefie
 E2,,status,skip,0.2,,no labelled bird-detection dataset under datasets/
 E5,,status,skip,0.2,,no labelled bird-detection dataset under datasets/
 E10,,status,skip,0.2,,no xeno-canto / special-species data (expected: needs xeno-canto key/download not present in nightly run)
+perch_v1_esc50,esc50_birds,status,skip,0.9,,insufficient embeddings: N=0 failures=240
+yamnet_base_esc50,esc50_birds,status,skip,0.7,,insufficient embeddings: N=0 failures=240
+perch_v1_esc50,esc50_birds,roc_auc,0.9962,48.9,,N=240 dim=1280 5-fold-CV seed=1337 pos=40 neg=200 pos_rate=0.17 failures=0 task=chirping_birds_vs_rest; frozen emb + StdScaler+LogReg
+yamnet_base_esc50,esc50_birds,roc_auc,0.9969,11.7,,N=240 dim=2048 5-fold-CV seed=1337 pos=40 neg=200 pos_rate=0.17 failures=0 task=chirping_birds_vs_rest; frozen emb + StdScaler+LogReg
