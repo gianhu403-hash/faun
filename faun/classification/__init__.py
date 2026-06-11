@@ -9,10 +9,39 @@ stdlib + typing only — no heavy imports here.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-__all__ = ["Prediction", "SpeciesClassifier", "StubAdapter"]
+__all__ = [
+    "Prediction",
+    "SpeciesClassifier",
+    "StubAdapter",
+    "BirdNETAdapter",
+    "YAMNetAdapter",
+    "PerchAdapter",
+]
+
+# Lazy adapter re-exports (PEP 562). Concrete adapters live in sibling modules
+# that may import heavy ML deps; we expose them at package level via __getattr__
+# WITHOUT forcing those imports at ``import faun.classification`` time.
+_LAZY_ADAPTERS = {
+    "BirdNETAdapter": "birdnet",
+    "YAMNetAdapter": "yamnet",
+    "PerchAdapter": "perch",
+}
+
+
+def __getattr__(name: str):
+    module_name = _LAZY_ADAPTERS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = importlib.import_module(f".{module_name}", __name__)
+    return getattr(module, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
 
 
 @dataclass
