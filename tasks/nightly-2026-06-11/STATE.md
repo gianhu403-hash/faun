@@ -23,9 +23,11 @@ On restart/compaction: re-read this file FIRST, continue from last checkpoint, d
 - 🔄 Track B cluster: Workflow `wnnu2ccnb` still running (yadisk/datasets/images in tmux).
 
 ## Phase 2 — code waves launched (4 worktrees from main 2502323, disjoint paths)
-- 🔄 W1 core `wcj4ouiwc` → ../faun-wt/core (feat/pipeline-core): ingest+ordering(Opus) ‖ segmentation+jobs(Fable) ‖ output+storage(Opus) → verify agent
-- 🔄 W2 apiui `wi1z47lcu` → ../faun-wt/apiui (feat/pipeline-api-ui): api+cli(Opus) → UI ui-designer+Playwright → verify. Integration seam: api.run_pipeline() lazy-imports; tests patch it.
-- 🔄 W3 adapters `wkptoimtl` → ../faun-wt/adapters (feat/classifier-adapters): BirdNET/YAMNet/Perch lazy adapters + PEP562 reexports (Opus) → verify
+- ✅ W1 core DONE: 144 passed in worktree (verified by main), committed 66a3c59, **MERGED to main 4aa2039**, pushed; CI in_progress (check before next merge).
+- ✅ W2 apiui DONE: 54 passed + api smoke in worktree; UI 4 browser iterations (screenshots in faun-nightly-artifacts/ui-iter-*.png; subagent used local Chromium — Playwright MCP unavailable in its context). Committed 5a4c0a1, **MERGED 5fc7549**, CI SUCCESS. jobs/ gitignored.
+- ✅ W3 **MERGED 6443700** after W2 (order kept); merged-main suite 177 passed locally.
+- ✅ **Phase-5 e2e smokes done EARLY by main on merged main:** CLI smoke caught real seam drift (api.run_pipeline vs W1 CsvWriter/AudioFileEntry APIs) → fixed in api.py by main (commit "fix(api): align run_pipeline with real W1 module APIs", pushed). CLI: synthetic 48k trap dir → CSV (A1, 2.23s, StubAdapter preds) ✅. API e2e with real chain: POST→done(progress 1.0)→CSV→UI 200 ✅. Suite 177 passed.
+- ✅ W3 adapters DONE: 67 passed, lazy-import gate verified (no TF/birdnetlib pulled on import); committed+pushed feat/classifier-adapters. HOLD merge until W2 lands (order core→apiui→adapters). NB: birdnetlib/Perch API signatures are assumed (mocked tests) — live integration check is in W5/E-experiments.
 - 🔄 W4 expcode `wbhi4rr1w` → ../faun-wt/exp (feat/ml-experiments): runner+wrappers(Fable) ‖ exp_e1..e10(Opus) → rsync to cluster:/home/oleg/faun-data/code/ + v7 weights scp
 - W5 experiments-run: waits for Track B images+datasets AND W4 rsync.
 - Merge order (Phase 5): core→apiui→adapters→exp, pytest in worktree before each, green CI after each.
