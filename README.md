@@ -1,17 +1,28 @@
 # Faun
 
-ФАВН — система автоматического мониторинга лесных угроз на базе акустических датчиков, дронов и ИИ. Распознаёт звуки незаконной рубки, выстрелов и пожаров, определяет координаты источника, отправляет дрон для фотофиксации и мгновенно оповещает лесных инспекторов через Telegram.
+Офлайн batch-pipeline распознавания видов птиц по записям с аудиоловушек
+(Yandex Cloud + Президентский фонд природы). Двухэтапный контур:
+детектор звуковых событий → классификатор видов → CSV.
 
-Как стартует
+## Quickstart
 
-Система состоит из 3 Docker-контейнеров, запускаемых через docker-compose up:
+```bash
+pip install -r requirements-pipeline.txt
 
-lora_gateway (порт 9000) — стартует первым. Слушает TCP-соединения от edge-устройств, принимает JSON-пакеты с классом угрозы и координатами, запрашивает анализ фото через YandexGPT Vision, формирует алерт и шлёт уведомление в Telegram.
+# CLI: обработать папку с записями ловушек
+faun process <dir> --out results.csv
 
-edge — запускает edge.server. Слушает микрофоны (реальные или симулятор), при обнаружении резкого звука (onset detection) → классифицирует звук через YAMNet → триангулирует через GCC-PHAT → принимает решение (ALERT/VERIFY/LOG) → отправляет дрон → передаёт данные на gateway через LoRa.
+# API: поднять сервис
+uvicorn faun.api:app --reload
+#   POST /jobs {source_path|url, lat, lon} -> {job_id}
+#   GET  /jobs/{id}            -> status
+#   GET  /jobs/{id}/results.csv
 
-cloud (порт 8000) — основной сервер. Запускает Telegram-бота (polling), поднимает FastAPI с WebSocket для дашборда, REST API для аналитики, управления инспекторами, демо-сценариев и RAG-запросов
+# UI: faun/static/index.html (форма -> запуск -> скачивание CSV)
+```
 
-Вся система подниается с помощью команды docker-compose up --build
+CSV-формат: `track,start_sec,duration_sec,species,probability` (+ sidecar с метаданными ловушки).
+Контракт интерфейсов: [`faun/INTERFACES.md`](faun/INTERFACES.md). Детали — в Phase 6.
 
-Более подробная документация на сайте: https://faun-forrest.duckdns.org/docs/
+Хакатонный код (real-time, TDOA, LoRa, Telegram, дрон, RAG) заморожен в
+[`legacy/`](legacy/) и на теге `v1-hackathon`.

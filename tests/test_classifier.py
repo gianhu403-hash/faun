@@ -1,4 +1,4 @@
-"""Tests for edge.audio.classifier — YAMNet-based sound classifier.
+"""Tests for faun.ml.yamnet — YAMNet-based sound classifier.
 
 15 tests exercising constants, classification pipeline, padding logic,
 and error/edge-case handling.  All TensorFlow dependencies are mocked out.
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from edge.audio.classifier import (
+from faun.ml.yamnet import (
     CLASSES,
     AudioResult,
     _unknown,
@@ -71,11 +71,11 @@ def _patch_classify(
         head = _make_head_mock(head_pred)
 
     with (
-        patch("edge.audio.classifier.sf") as mock_sf,
-        patch("edge.audio.classifier._load_models", return_value=(yamnet, head)),
+        patch("faun.ml.yamnet.sf") as mock_sf,
+        patch("faun.ml.yamnet._load_models", return_value=(yamnet, head)),
     ):
         mock_sf.read.return_value = (waveform, sr)
-        from edge.audio.classifier import classify
+        from faun.ml.yamnet import classify
 
         return classify("fake_audio.wav")
 
@@ -169,14 +169,14 @@ class TestClassifyPadding:
 
         yamnet = _make_yamnet_mock(emb_shape=(5, 1024))
         with (
-            patch("edge.audio.classifier.sf") as mock_sf,
+            patch("faun.ml.yamnet.sf") as mock_sf,
             patch(
-                "edge.audio.classifier._load_models",
+                "faun.ml.yamnet._load_models",
                 return_value=(yamnet, head),
             ),
         ):
             mock_sf.read.return_value = (waveform, 16000)
-            from edge.audio.classifier import classify
+            from faun.ml.yamnet import classify
 
             result = classify("fake_audio.wav")
 
@@ -193,14 +193,14 @@ class TestClassifyPadding:
         yamnet = _make_yamnet_mock(emb_shape=(5, 1024))
 
         with (
-            patch("edge.audio.classifier.sf") as mock_sf,
+            patch("faun.ml.yamnet.sf") as mock_sf,
             patch(
-                "edge.audio.classifier._load_models",
+                "faun.ml.yamnet._load_models",
                 return_value=(yamnet, head),
             ),
         ):
             mock_sf.read.return_value = (waveform, 16000)
-            from edge.audio.classifier import classify
+            from faun.ml.yamnet import classify
 
             result = classify("fake_audio.wav")
 
@@ -236,9 +236,9 @@ class TestClassifyEdgeCases:
         """If head model failed to load (None), result is unknown."""
         yamnet = _make_yamnet_mock()
         with (
-            patch("edge.audio.classifier.sf") as mock_sf,
+            patch("faun.ml.yamnet.sf") as mock_sf,
             patch(
-                "edge.audio.classifier._load_models",
+                "faun.ml.yamnet._load_models",
                 return_value=(yamnet, None),
             ),
         ):
@@ -246,7 +246,7 @@ class TestClassifyEdgeCases:
                 np.random.randn(16000).astype(np.float32),
                 16000,
             )
-            from edge.audio.classifier import classify
+            from faun.ml.yamnet import classify
 
             result = classify("fake_audio.wav")
 
@@ -274,14 +274,14 @@ class TestClassifyNormalization:
             return yamnet(wf)
 
         with (
-            patch("edge.audio.classifier.sf") as mock_sf,
+            patch("faun.ml.yamnet.sf") as mock_sf,
             patch(
-                "edge.audio.classifier._load_models",
+                "faun.ml.yamnet._load_models",
                 return_value=(capturing_yamnet, head),
             ),
         ):
             mock_sf.read.return_value = (quiet, 16000)
-            from edge.audio.classifier import classify
+            from faun.ml.yamnet import classify
 
             classify("fake_audio.wav")
 
@@ -299,30 +299,30 @@ class TestClassifyNormalization:
 class TestClassMapExpanded:
     def test_class_map_sawing_maps_to_chainsaw(self) -> None:
         """'Sawing' AudioSet class should map to 'chainsaw'."""
-        from edge.audio.classifier import YAMNET_CLASS_MAP
+        from faun.ml.yamnet import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Sawing") == "chainsaw"
 
     def test_class_map_drill_maps_to_chainsaw(self) -> None:
         """'Drill' AudioSet class should map to 'chainsaw'."""
-        from edge.audio.classifier import YAMNET_CLASS_MAP
+        from faun.ml.yamnet import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Drill") == "chainsaw"
 
     def test_class_map_tools_maps_to_chainsaw(self) -> None:
         """'Tools' AudioSet class should map to 'chainsaw'."""
-        from edge.audio.classifier import YAMNET_CLASS_MAP
+        from faun.ml.yamnet import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Tools") == "chainsaw"
 
     def test_class_map_whack_maps_to_axe(self) -> None:
         """'Whack, thwack' AudioSet class should map to 'axe'."""
-        from edge.audio.classifier import YAMNET_CLASS_MAP
+        from faun.ml.yamnet import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Whack, thwack") == "axe"
 
     def test_class_map_thump_maps_to_axe(self) -> None:
         """'Thump, thud' AudioSet class should map to 'axe'."""
-        from edge.audio.classifier import YAMNET_CLASS_MAP
+        from faun.ml.yamnet import YAMNET_CLASS_MAP
 
         assert YAMNET_CLASS_MAP.get("Thump, thud") == "axe"
