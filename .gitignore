@@ -37,3 +37,8 @@ site/
 # Claude Code local state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Experiment runtime artifacts
+experiments/logs/
+experiments/results.csv
+experiments/results/
