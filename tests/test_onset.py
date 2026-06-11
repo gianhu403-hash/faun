@@ -1,4 +1,4 @@
-"""Tests for edge.audio.onset — Sharp sound onset detector.
+"""Tests for faun.ml.onset — Sharp sound onset detector.
 
 20 tests covering onset detection, sustained sound patterns,
 stateful behavior, cooldown, and edge cases.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from edge.audio.onset import OnsetDetector, OnsetEvent, detect_onset
+from faun.ml.onset import OnsetDetector, OnsetEvent, detect_onset
 
 
 # ---------------------------------------------------------------------------

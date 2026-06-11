@@ -18,7 +18,7 @@ AudioClass = Literal[
 
 MODEL_PATH = os.environ.get(
     "YAMNET_HEAD_PATH",
-    os.path.join(os.path.dirname(__file__), "yamnet_forest_classifier_v8.keras"),
+    os.path.join(os.path.dirname(__file__), "yamnet_forest_classifier_v7.keras"),
 )
 
 # Mapping from YAMNet base class names to our target classes
