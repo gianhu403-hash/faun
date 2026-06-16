@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Faun — карта ловушек</title>
+  <!-- Leaflet via unpkg CDN (prototype; offline-bundled tiles are a separate task). -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<main>
+  <h1>Карта ловушек</h1>
+  <p class="sub">Позиции акустических ловушек по загруженным задачам и состояние очереди.</p>
+
+  <div class="card">
+    <h2>Карта</h2>
+    <div id="map"></div>
+    <div class="empty-state hidden" id="map-empty">
+      Ни у одной задачи нет координат ловушки — точки на карте отсутствуют.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Задачи</h2>
+    <div class="empty-state hidden" id="jobs-empty">Пока нет задач.</div>
+    <div class="err-msg hidden" id="jobs-err"></div>
+    <table id="jobs-table" class="hidden">
+      <thead>
+        <tr>
+          <th>ID</th><th>статус</th><th>источник</th><th>создана</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="jobs-body"></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/app.js"></script>
+<script>
+renderNav("dashboard");
+
+let map = null;
+
+function initMap() {
+  // Default view centred on European Russia until bounds are known.
+  map = L.map("map").setView([58.0, 45.0], 5);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "© OpenStreetMap",
+  }).addTo(map);
+}
+
+function isNum(v) {
+  return typeof v === "number" && isFinite(v);
+}
+
+/* Draw a source-localization point ONLY when a real, sufficiently-localized
+   detection exists. Backend currently returns localization:null, so this path
+   is normally inert — that is correct and honest, we never fabricate a point. */
+function drawLocalization(loc, latlngs) {
+  if (!loc) return;
+  if (loc.method === "insufficient-traps") return;
+  if (!isNum(loc.lat) || !isNum(loc.lon)) return;
+  const m = L.circleMarker([loc.lat, loc.lon], {
+    radius: 6, color: "#f85149", fillColor: "#f85149", fillOpacity: 0.7,
+  }).addTo(map);
+  const p = document.createElement("div");
+  p.textContent = "Источник звука (" + (loc.method || "?") + ")";
+  m.bindPopup(p);
+  latlngs.push([loc.lat, loc.lon]);
+}
+
+async function load() {
+  let jobs;
+  try {
+    jobs = await getJSON("/jobs");
+  } catch (err) {
+    $("jobs-err").textContent = "Не удалось загрузить задачи: " + err.message;
+    $("jobs-err").classList.remove("hidden");
+    return;
+  }
+
+  // --- jobs table ---
+  if (jobs.length === 0) {
+    $("jobs-empty").classList.remove("hidden");
+  } else {
+    const body = $("jobs-body");
+    body.innerHTML = "";
+    jobs.forEach((j) => {
+      const tr = document.createElement("tr");
+
+      const idTd = document.createElement("td");
+      const idCode = document.createElement("code");
+      idCode.textContent = shortId(j.job_id);
+      idCode.title = j.job_id;
+      idTd.appendChild(idCode);
+      tr.appendChild(idTd);
+
+      const stTd = document.createElement("td");
+      const badge = document.createElement("span");
+      badge.className = "badge " + (j.status || "");
+      badge.textContent = j.status || "";
+      stTd.appendChild(badge);
+      tr.appendChild(stTd);
+
+      const srcTd = document.createElement("td");
+      srcTd.textContent = j.source_path || "";
+      tr.appendChild(srcTd);
+
+      const createdTd = document.createElement("td");
+      createdTd.textContent = j.created_at || "";
+      tr.appendChild(createdTd);
+
+      const linkTd = document.createElement("td");
+      const a = document.createElement("a");
+      a.className = "link";
+      a.href = "/review?job=" + encodeURIComponent(j.job_id);
+      a.textContent = "переразметка";
+      linkTd.appendChild(a);
+      tr.appendChild(linkTd);
+
+      body.appendChild(tr);
+    });
+    $("jobs-table").classList.remove("hidden");
+  }
+
+  // --- map: trap markers for jobs with numeric coords ---
+  const latlngs = [];
+  jobs.forEach((j) => {
+    if (isNum(j.lat) && isNum(j.lon)) {
+      const m = L.marker([j.lat, j.lon]).addTo(map);
+      const p = document.createElement("div");
+      const t1 = document.createElement("div");
+      t1.textContent = "Ловушка " + shortId(j.job_id);
+      const t2 = document.createElement("div");
+      t2.textContent = j.source_path || "";
+      p.appendChild(t1);
+      p.appendChild(t2);
+      m.bindPopup(p);
+      latlngs.push([j.lat, j.lon]);
+    }
+  });
+
+  if (latlngs.length > 0) {
+    map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 13 });
+  } else {
+    $("map-empty").classList.remove("hidden");
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  initMap();
+  load();
+});
+</script>
+</body>
+</html>

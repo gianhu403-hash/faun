@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Faun — переразметка</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<main>
+  <h1>Переразметка детекций</h1>
+  <p class="sub">Прослушивание реальных аудиофрагментов и исправление вида лесником.</p>
+
+  <!-- Job picker: shown only when ?job is absent. -->
+  <div class="card hidden" id="picker-card">
+    <label for="job-select">Выберите задачу</label>
+    <select id="job-select"></select>
+    <button class="inline" id="open-job-btn" type="button">Открыть</button>
+    <div class="empty-state hidden" id="picker-empty">Пока нет задач.</div>
+  </div>
+
+  <!-- Per-row audio player template, cloned by JS with a per-detection src.
+       Keeping the <audio> markup in the static page documents the required
+       affordance and lets the render backstop assert it. -->
+  <template id="audio-tpl">
+    <audio controls preload="none"></audio>
+  </template>
+
+  <div class="card hidden" id="det-card">
+    <div class="status">Задача <code id="job-id"></code></div>
+    <div class="err-msg hidden" id="load-err"></div>
+    <div class="empty-state hidden" id="det-empty">
+      Для этой задачи нет детекций.
+    </div>
+    <table id="det-table" class="hidden">
+      <thead>
+        <tr>
+          <th>ловушка</th>
+          <th>время</th>
+          <th>аудио</th>
+          <th>текущая метка</th>
+          <th>переразметка</th>
+        </tr>
+      </thead>
+      <tbody id="det-body"></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+renderNav("review");
+
+let JOB_ID = null;
+
+/* Render the current-label cell: species + colour-coded source badge +
+   probability (only when not null). */
+function renderLabelCell(td, det) {
+  td.innerHTML = "";
+  const lab = currentLabel(det);
+  if (!lab) {
+    td.textContent = "—";
+    return;
+  }
+  const sp = document.createElement("span");
+  sp.textContent = lab.species + " ";
+  td.appendChild(sp);
+
+  const b = sourceBadge(lab.source);
+  const badge = document.createElement("span");
+  badge.className = "badge " + b.cls;
+  badge.textContent = b.text;
+  td.appendChild(badge);
+
+  if (typeof lab.probability === "number") {
+    const conf = document.createElement("span");
+    conf.style.color = "var(--muted)";
+    conf.textContent = " " + lab.probability.toFixed(2);
+    td.appendChild(conf);
+  }
+}
+
+function renderDetectionRow(det) {
+  const tr = document.createElement("tr");
+  tr.dataset.detId = det.detection_id;
+
+  const trapTd = document.createElement("td");
+  trapTd.textContent = det.trap_id || "";
+  tr.appendChild(trapTd);
+
+  const timeTd = document.createElement("td");
+  const start = det.segment ? det.segment.start_s : null;
+  timeTd.textContent = fmtTime(start);
+  tr.appendChild(timeTd);
+
+  // REAL audio clip — preload none so a long list does not hammer the server.
+  const audioTd = document.createElement("td");
+  const audio = $("audio-tpl").content.firstElementChild.cloneNode(true);
+  audio.src = "/jobs/" + JOB_ID + "/segments/" + det.detection_id + ".wav";
+  audioTd.appendChild(audio);
+  tr.appendChild(audioTd);
+
+  const labelTd = document.createElement("td");
+  labelTd.className = "label-cell";
+  renderLabelCell(labelTd, det);
+  tr.appendChild(labelTd);
+
+  // Relabel control: species input + button.
+  const relabelTd = document.createElement("td");
+  const form = document.createElement("div");
+  form.className = "relabel-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "вид…";
+  const cur = currentLabel(det);
+  if (cur) input.value = cur.species;
+  const btn = document.createElement("button");
+  btn.className = "inline";
+  btn.type = "button";
+  btn.textContent = "Переразметить";
+  form.appendChild(input);
+  form.appendChild(btn);
+  relabelTd.appendChild(form);
+  const rowErr = document.createElement("div");
+  rowErr.className = "row-err hidden";
+  relabelTd.appendChild(rowErr);
+  tr.appendChild(relabelTd);
+
+  btn.addEventListener("click", async () => {
+    const species = input.value.trim();
+    rowErr.classList.add("hidden");
+    if (!species) {
+      rowErr.textContent = "Укажите вид.";
+      rowErr.classList.remove("hidden");
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const updated = await postJSON(
+        "/jobs/" + JOB_ID + "/detections/" + det.detection_id + "/label",
+        { species: species, source: "operator:ranger" }
+      );
+      // Update the row in place from the returned detection.
+      renderLabelCell(labelTd, updated);
+    } catch (err) {
+      rowErr.textContent = "Ошибка: " + err.message;
+      rowErr.classList.remove("hidden");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  return tr;
+}
+
+async function loadDetections(jobId) {
+  JOB_ID = jobId;
+  $("det-card").classList.remove("hidden");
+  $("job-id").textContent = jobId;
+  $("load-err").classList.add("hidden");
+  $("det-empty").classList.add("hidden");
+  $("det-table").classList.add("hidden");
+
+  let dets;
+  try {
+    dets = await getJSON("/jobs/" + jobId + "/detections");
+  } catch (err) {
+    $("load-err").textContent =
+      "Не удалось загрузить детекции: " + err.message;
+    $("load-err").classList.remove("hidden");
+    return;
+  }
+
+  if (!Array.isArray(dets) || dets.length === 0) {
+    $("det-empty").classList.remove("hidden");
+    return;
+  }
+
+  const body = $("det-body");
+  body.innerHTML = "";
+  dets.forEach((det) => body.appendChild(renderDetectionRow(det)));
+  $("det-table").classList.remove("hidden");
+}
+
+async function showPicker() {
+  $("picker-card").classList.remove("hidden");
+  let jobs = [];
+  try {
+    jobs = await getJSON("/jobs");
+  } catch (_e) { /* fall through to empty state */ }
+
+  if (!jobs || jobs.length === 0) {
+    $("picker-empty").classList.remove("hidden");
+    return;
+  }
+  const sel = $("job-select");
+  jobs.forEach((j) => {
+    const opt = document.createElement("option");
+    opt.value = j.job_id;
+    opt.textContent = shortId(j.job_id) + " — " + (j.status || "") +
+      " — " + (j.source_path || "");
+    sel.appendChild(opt);
+  });
+  $("open-job-btn").addEventListener("click", () => {
+    const id = sel.value;
+    if (id) loadDetections(id);
+  });
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  const jid = new URLSearchParams(location.search).get("job");
+  if (jid) {
+    loadDetections(jid);
+  } else {
+    showPicker();
+  }
+});
+</script>
+</body>
+</html>

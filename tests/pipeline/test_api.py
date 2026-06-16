@@ -124,6 +124,47 @@ def test_index_served(client):
     assert "Faun" in resp.text
 
 
+# ---------------------------------------------------------------------------
+# Phase-3 frontend render backstop (gate 6): the three windows + shared assets
+# ---------------------------------------------------------------------------
+
+
+def test_index_references_shared_assets(client):
+    """index.html must link the shared stylesheet + helpers (no inline-only)."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "/static/app.js" in resp.text
+    assert "/static/styles.css" in resp.text
+
+
+def test_dashboard_served(client):
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    # Map container + Leaflet dependency mark this as the dashboard window.
+    assert 'id="map"' in resp.text
+    assert "Leaflet" in resp.text or "leaflet" in resp.text
+    assert "/static/app.js" in resp.text
+    assert "/static/styles.css" in resp.text
+
+
+def test_review_served(client):
+    resp = client.get("/review")
+    assert resp.status_code == 200
+    # Real audio player + review wording mark this as the relabel window.
+    assert "<audio" in resp.text
+    assert "переразметка" in resp.text.lower()
+    assert "/static/app.js" in resp.text
+    assert "/static/styles.css" in resp.text
+
+
+def test_static_assets_served(client):
+    """StaticFiles mount serves the shared JS + CSS bundles."""
+    js = client.get("/static/app.js")
+    assert js.status_code == 200
+    css = client.get("/static/styles.css")
+    assert css.status_code == 200
+
+
 def test_store_is_faun_jobs(client, patched_pipeline, tmp_path):
     """The API persists through faun.jobs: the manifest it writes must be a valid
     faun.jobs Job (atomic store, single lifecycle), not a private api manifest."""

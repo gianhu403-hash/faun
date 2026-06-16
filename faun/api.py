@@ -306,6 +306,22 @@ def index() -> HTMLResponse:
     return HTMLResponse(index_html.read_text(encoding="utf-8"))
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> HTMLResponse:
+    page = _STATIC_DIR / "dashboard.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review() -> HTMLResponse:
+    page = _STATIC_DIR / "review.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="review.html not found")
+    return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest, background_tasks: BackgroundTasks) -> dict:
     job = jobs.create_job(
