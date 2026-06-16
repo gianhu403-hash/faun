@@ -282,3 +282,50 @@ def test_cli_export_clips_builds_zip(tmp_path, capsys):
     assert "Turdus merula" in index
     assert "model:perch" in index
     assert "det1" in index and "det2" in index
+
+
+@pytest.mark.requires_tf
+def test_real_embed_probe_adapter_roundtrip_cluster(tmp_path):
+    """7b (cluster-only): real YAMNet embed -> probe -> save -> reload via adapter.
+
+    SKIPS (never passes) without TensorFlow/tensorflow_hub — it exercises the
+    full deploy path only on the cluster (faun-ml-cpu/torch): human ground-truth
+    labels -> real YAMNet embeddings -> trained probe -> save -> reload through
+    YAMNetAdapter(probe_path=...) (the YAMNET_PROBE_PATH path) -> classify.
+    """
+    pytest.importorskip("tensorflow")
+    pytest.importorskip("tensorflow_hub")
+    from faun.classification import YAMNetAdapter
+
+    audio_dir = tmp_path
+    labels = []
+    rng = np.random.default_rng(0)
+    for species, freq in (("species_a", 1000.0), ("species_b", 3000.0)):
+        for i in range(2):
+            t = np.arange(SR) / SR
+            wav = (
+                0.3 * np.sin(2 * np.pi * freq * t) + 0.01 * rng.standard_normal(SR)
+            ).astype(np.float32)
+            name = f"{species}_{i}.wav"
+            sf.write(audio_dir / name, wav, SR)
+            labels.append(
+                _label(
+                    "expert:ornithologist",
+                    "confirmed",
+                    species=species,
+                    source_file=name,
+                )
+            )
+
+    out = tmp_path / "probe.pkl"
+    metrics = retraining.retrain_from_labels(labels, audio_dir, YAMNetAdapter(), out)
+    assert out.exists()
+    assert metrics["n"] == 4 and metrics["n_classes"] == 2
+
+    # Reload through the adapter and classify; labels = the probe's own classes.
+    probe = retraining.load_probe(out)
+    adapter = YAMNetAdapter(probe_path=str(out), labels=list(probe.classes_))
+    t = np.arange(SR) / SR
+    probe_wav = (0.3 * np.sin(2 * np.pi * 1000.0 * t)).astype(np.float32)
+    preds = adapter.classify(probe_wav, SR)
+    assert preds and preds[0].species in {"species_a", "species_b"}
