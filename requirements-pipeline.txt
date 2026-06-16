@@ -7,3 +7,5 @@ soxr
 pydantic
 aiofiles
 httpx
+scipy
+scikit-learn
