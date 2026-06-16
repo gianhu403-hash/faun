@@ -23,14 +23,17 @@
   - `StubAdapter` (в скелете, без ML), `BirdNETAdapter` (CC BY-NC-SA, non-commercial), `PerchAdapter` (Apache 2.0, Perch 2 — продуктовый),
   - `YAMNetAdapter` (embeddings + probe, НЕ хакатонная YAMNet-голова).
 - `faun/output` — `CsvWriter`, колонки CSV: `track,start_sec,duration_sec,species,probability` (+ sidecar `results_meta.json` с метаданными ловушки).
+- `faun/detections` — центральная абстракция **детекции**: `Detection`(переиспользует `Segment`/`Prediction`) + `Label`(`source`/`status`/`ts`); атомарный sidecar `detections.jsonl`; `is_ground_truth` (истина только `expert`/`ranger` + `confirmed`/`corrected`).
+- `faun/localization` — порт TDOA из `legacy/edge/tdoa` (GCC-PHAT + Nelder-Mead): `triangulate`, `localize_event` (<3 ловушек → `insufficient-traps` без точки; ≥3 → `tdoa-synthetic-validated`). Валидно только на синтетике; на реале — мс-синхронизация (см. `experiments/report/METRICS_HONESTY.md`).
+- `faun/retraining` — петля «человеческие метки → дообучение пробы»: `retrain_from_labels` (фильтр только `expert`/`ranger`, нуль таких → явный отказ), `train_probe_cv` (StratifiedKFold + CI), `save/load_probe` (sklearn pickle, грузится `YAMNetAdapter` через `YAMNET_PROBE_PATH`). TF — только lazy.
 - `faun/jobs` — изоляция батчей: namespace на `job_id`, `workdir=jobs_root/<job_id>/`, без общих temp-путей.
 - `faun/storage` — протокол `Storage` + только `LocalFSStorage` (S3 — задача на июль, НЕ сейчас).
-- `faun/api` — FastAPI: `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/results.csv`.
-- `faun/cli` — `faun process <dir> [--out results.csv]`.
-- `faun/static/index.html` — vanilla-JS UI: форма (папка/URL) → `POST /jobs` → poll статуса → таблица + скачивание CSV.
+- `faun/api` — FastAPI: `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/results.csv`; v2-прототип добавил `GET /jobs`, `GET /jobs/{id}/detections`, `GET /jobs/{id}/segments/{det}.wav`, `POST /jobs/{id}/detections/{det}/label` (flock read-modify-write), `GET /dashboard`, `GET /review`. `run_pipeline` пишет `detections.jsonl` + клипы `segments/<det>.wav` из ОРИГИНАЛА на исходной sr (CSV/sidecar — без изменений).
+- `faun/cli` — `faun process <dir> [--out results.csv]`; `faun retrain --labels <csv> --model yamnet --out probe.pkl`; `faun export-clips --job <dir> --out clips.zip` (реальные .wav орнитологу).
+- `faun/static` — vanilla-JS UI, 3 окна: `index.html` (загрузка/очередь), `dashboard.html` (Leaflet-карта ловушек + список job), `review.html` (детекции + аудиоплеер реального клипа + переразметка лесником); общие `app.js`/`styles.css`.
 - `faun/ml` — REUSE-ядро из хакатона: `onset.py`, `ndsi.py`, `yamnet.py`, `datasphere_client.py`.
 
-Контракт интерфейсов заморожен в `faun/INTERFACES.md` — Phase-2 волны пишут против него, сигнатуры не меняем.
+Контракт интерфейсов заморожен в `faun/INTERFACES.md` — Phase-2 волны пишут против него, сигнатуры не меняем. v2-прототип расширяет контур ТОЛЬКО аддитивно: новый sidecar `detections.jsonl` и новые роуты, без изменения колонок CSV и замороженных сигнатур. `requirements-pipeline.txt` пополнен `scipy`+`scikit-learn` (нужны localization/retraining; тяжёлые ML-либы по-прежнему lazy).
 
 ## Вычислитель
 
