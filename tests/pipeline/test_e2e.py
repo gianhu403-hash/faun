@@ -63,6 +63,43 @@ def test_run_pipeline_real_chain(tmp_path: Path) -> None:
     assert sidecar["trap_id"] == "A1"
     assert sidecar["files"] == ["REC_20260610_213000.wav"]
 
+    # --- Phase-2: detections.jsonl + real clips ---------------------------
+    from faun.detections import read_detections
+
+    jsonl = job_dir / "detections.jsonl"
+    assert jsonl.exists()
+    dets = read_detections(jsonl)
+    assert len(dets) >= 1, "burst must persist at least one detection"
+
+    seg_dir = job_dir / "segments"
+    clips = list(seg_dir.glob("*.wav"))
+    assert clips, "segments/ must contain the clip(s)"
+    assert len(clips) == len(dets)
+
+    # The original waveform, to compare clip content against the slice.
+    original, orig_sr = sf.read(
+        tmp_path / "data" / "A1" / "REC_20260610_213000.wav",
+        dtype="float64",
+        always_2d=False,
+    )
+
+    det = dets[0]
+    clip_path = job_dir / det.segment_path
+    info = sf.info(str(clip_path))
+    assert info.samplerate == SR  # original sr preserved (48000)
+
+    clip, clip_sr = sf.read(clip_path, dtype="float64", always_2d=False)
+    assert clip_sr == SR
+    # Clip length / sr is within tolerance of the detection duration_s.
+    assert abs(len(clip) / clip_sr - det.segment.duration_s) < 0.05
+
+    # Clip content equals the corresponding slice of the original waveform.
+    start = round(det.segment.start_s * SR)
+    end = round((det.segment.start_s + det.segment.duration_s) * SR)
+    expected = original[start:end]
+    assert clip.shape == expected.shape
+    assert np.allclose(clip, expected, atol=1e-4)
+
 
 def test_run_pipeline_multi_trap_sidecar_is_honest(tmp_path: Path) -> None:
     _make_trap_dir(tmp_path / "data", "A1")
@@ -91,3 +128,10 @@ def test_run_pipeline_silence_yields_empty_csv(tmp_path: Path) -> None:
         header = next(reader)
         assert header == list(COLUMNS)
         assert list(reader) == []  # header only — no events in silence
+
+    # Phase-2: detections.jsonl exists but is empty (0 lines), no clips.
+    job_dir = tmp_path / "job"
+    jsonl = job_dir / "detections.jsonl"
+    assert jsonl.exists()
+    assert jsonl.read_text(encoding="utf-8") == ""
+    assert not list((job_dir / "segments").glob("*.wav"))
