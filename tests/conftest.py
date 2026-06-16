@@ -70,3 +70,11 @@ def mock_head_model() -> MagicMock:
     head.return_value = pred_tensor
 
     return head
+
+
+def pytest_configure(config) -> None:
+    """Register custom markers (avoids unregistered-marker warnings)."""
+    config.addinivalue_line(
+        "markers",
+        "requires_tf: needs TensorFlow + tensorflow_hub (cluster only; skips in CI)",
+    )

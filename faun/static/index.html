@@ -4,33 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Faun — акустический пайплайн</title>
-  <style>
-    :root { --bg:#0f1419; --panel:#1a2129; --fg:#e6edf3; --muted:#8b98a5; --accent:#3fb950; --err:#f85149; }
-    * { box-sizing: border-box; }
-    body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-    main { max-width:760px; margin:0 auto; padding:32px 20px; }
-    h1 { font-size:22px; margin:0 0 4px; }
-    p.sub { color:var(--muted); margin:0 0 24px; }
-    .card { background:var(--panel); border:1px solid #2a3038; border-radius:10px; padding:20px; margin-bottom:20px; }
-    label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
-    input { width:100%; padding:9px 11px; background:#0d1117; border:1px solid #30363d; border-radius:6px; color:var(--fg); font-size:14px; }
-    .row { display:flex; gap:12px; }
-    .row > div { flex:1; }
-    button { margin-top:16px; padding:10px 18px; background:var(--accent); color:#07120a; border:0; border-radius:6px; font-weight:600; font-size:14px; cursor:pointer; }
-    button:disabled { opacity:.5; cursor:not-allowed; }
-    .status { font-size:14px; }
-    .status .badge { display:inline-block; padding:2px 10px; border-radius:20px; font-size:12px; font-weight:600; }
-    .badge.pending,.badge.running { background:#1f2d3d; color:#58a6ff; }
-    .badge.done { background:#15351f; color:var(--accent); }
-    .badge.error { background:#3d1f1f; color:var(--err); }
-    progress { width:100%; height:8px; margin-top:10px; }
-    table { width:100%; border-collapse:collapse; margin-top:14px; font-size:13px; }
-    th,td { text-align:left; padding:7px 9px; border-bottom:1px solid #262c34; }
-    th { color:var(--muted); font-weight:600; }
-    a.dl { display:inline-block; margin-top:14px; color:var(--accent); }
-    .hidden { display:none; }
-    .err-msg { color:var(--err); margin-top:10px; }
-  </style>
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
 <main>
@@ -62,6 +36,7 @@
       <span class="badge pending" id="badge">pending</span>
     </div>
     <progress id="bar" max="1" value="0"></progress>
+    <div class="queue hidden" id="queue"></div>
     <div class="err-msg hidden" id="run-err"></div>
     <table id="results" class="hidden">
       <thead>
@@ -69,33 +44,20 @@
       </thead>
       <tbody id="results-body"></tbody>
     </table>
-    <a class="dl hidden" id="dl-link" download>Скачать CSV</a>
+    <div id="done-actions" class="hidden">
+      <a class="dl" id="dl-link" download>Скачать CSV</a>
+      &nbsp;·&nbsp;
+      <a class="cta" id="review-link">Открыть переразметку</a>
+    </div>
   </div>
 </main>
 
+<script src="/static/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
 let pollTimer = null;
 let pollFails = 0;
 
-// Minimal CSV row parser: respects double-quoted fields (so a value with a
-// comma doesn't shift columns) and "" escaping. Display-only.
-function parseCsvRow(line) {
-  const out = [];
-  let cur = "", q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; } else { q = false; }
-      } else { cur += c; }
-    } else if (c === '"') { q = true; }
-    else if (c === ",") { out.push(cur); cur = ""; }
-    else { cur += c; }
-  }
-  out.push(cur);
-  return out;
-}
+renderNav("upload");
 
 $("job-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -108,13 +70,7 @@ $("job-form").addEventListener("submit", async (e) => {
   const body = { source_path: source, lat, lon };
 
   try {
-    const res = await fetch("/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error("Сервер вернул " + res.status);
-    const { job_id } = await res.json();
+    const { job_id } = await postJSON("/jobs", body);
     startPolling(job_id);
   } catch (err) {
     $("form-err").textContent = err.message;
@@ -127,13 +83,35 @@ function startPolling(jobId) {
   $("status-card").classList.remove("hidden");
   $("job-id").textContent = jobId;
   $("results").classList.add("hidden");
-  $("dl-link").classList.add("hidden");
+  $("done-actions").classList.add("hidden");
   $("run-err").classList.add("hidden");
+  $("queue").classList.add("hidden");
 
   if (pollTimer) clearInterval(pollTimer);
   pollFails = 0;
   pollTimer = setInterval(() => poll(jobId), 2000);
   poll(jobId);
+}
+
+/* Queue visibility: count running+pending jobs across the whole store so the
+   operator sees "обрабатывается N из M" instead of a silent 0% bar. Best-effort
+   and non-fatal — a failed /jobs fetch just hides the queue line. */
+async function refreshQueue() {
+  try {
+    const jobs = await getJSON("/jobs");
+    const active = jobs.filter(
+      (j) => j.status === "running" || j.status === "pending"
+    ).length;
+    if (active > 0) {
+      $("queue").textContent =
+        "обрабатывается " + active + " из " + jobs.length;
+      $("queue").classList.remove("hidden");
+    } else {
+      $("queue").classList.add("hidden");
+    }
+  } catch (_e) {
+    $("queue").classList.add("hidden");
+  }
 }
 
 async function poll(jobId) {
@@ -168,10 +146,18 @@ async function poll(jobId) {
   badge.className = "badge " + m.status;
   if (typeof m.progress === "number") $("bar").value = m.progress;
 
+  if (m.status === "running" || m.status === "pending") {
+    refreshQueue();
+  } else {
+    $("queue").classList.add("hidden");
+  }
+
   if (m.status === "done") {
     clearInterval(pollTimer);
     $("bar").value = 1;
     await loadResults(jobId);
+    $("review-link").href = "/review?job=" + encodeURIComponent(jobId);
+    $("done-actions").classList.remove("hidden");
     $("submit-btn").disabled = false;
   } else if (m.status === "error") {
     clearInterval(pollTimer);
@@ -206,7 +192,6 @@ async function loadResults(jobId) {
   });
   $("results").classList.remove("hidden");
   $("dl-link").href = url;
-  $("dl-link").classList.remove("hidden");
 }
 </script>
 </body>
