@@ -138,7 +138,11 @@ def batch_label(
     # ``detections`` — собираются в ЕДИНСТВЕННОМ проходе для опц. эмбеддинга.
     clips: list[tuple[np.ndarray, int]] = []
 
-    manifest = scan(Path(archive))
+    from faun.sources import resolve_source
+
+    # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
+    scan_dir = resolve_source(str(archive), out_jsonl.parent)
+    manifest = scan(scan_dir)
     for entry in manifest.entries:
         waveform, sr = _read_clip(entry.path)
         for segment in extractor.extract(waveform, sr):

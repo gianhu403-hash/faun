@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import fcntl
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -30,6 +29,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, model_validator
 
 from faun import jobs
+from faun.obs import setup_logging, with_job_context
+from faun.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +53,13 @@ _DETECTION_ID_RE = re.compile(r"^[0-9a-fA-F-]+$")
 
 
 def jobs_root() -> Path:
-    """Resolve the jobs root (env FAUN_JOBS_ROOT, default ./jobs).
+    """Resolve the jobs root (FAUN_JOBS_ROOT, default ./jobs) via faun.settings.
 
-    Read at call time so tests can override the env var per-test.
+    Routed through the cached ``get_settings()``; tests clear that cache
+    (``get_settings.cache_clear()`` — done in the conftest autouse fixture) so a
+    per-test FAUN_JOBS_ROOT override is still picked up at call time.
     """
-    root = Path(os.environ.get("FAUN_JOBS_ROOT", "./jobs"))
+    root = get_settings().jobs_root
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -86,7 +89,7 @@ def _build_classifier():
     Heavy adapters are imported lazily via faun.classification (PEP-562) only
     when chosen, so importing this module never pulls TensorFlow.
     """
-    choice = os.environ.get("FAUN_CLASSIFIER", "stub").strip().lower()
+    choice = get_settings().classifier
     if choice in ("", "stub"):
         from faun.classification import StubAdapter
 
@@ -95,6 +98,10 @@ def _build_classifier():
         from faun.classification import PerchAdapter
 
         return PerchAdapter()
+    if choice == "perch-v2":
+        from faun.classification import Perch2Adapter
+
+        return Perch2Adapter()
     if choice == "birdnet":
         from faun.classification import BirdNETAdapter
 
@@ -105,7 +112,7 @@ def _build_classifier():
         return YAMNetAdapter()
     raise ValueError(
         f"unknown FAUN_CLASSIFIER={choice!r}; expected one of "
-        "stub, perch, birdnet, yamnet"
+        "stub, perch, perch-v2, birdnet, yamnet"
     )
 
 
@@ -118,6 +125,7 @@ def _classifier_source(classifier) -> str:
     from faun.detections import (
         SOURCE_BIRDNET,
         SOURCE_PERCH,
+        SOURCE_PERCH_V2,
         SOURCE_STUB,
         SOURCE_YAMNET_PROBE,
     )
@@ -126,6 +134,7 @@ def _classifier_source(classifier) -> str:
     mapping = {
         "StubAdapter": SOURCE_STUB,
         "PerchAdapter": SOURCE_PERCH,
+        "Perch2Adapter": SOURCE_PERCH_V2,
         "BirdNETAdapter": SOURCE_BIRDNET,
         "YAMNetAdapter": SOURCE_YAMNET_PROBE,
     }
@@ -160,6 +169,7 @@ def run_pipeline(
 
     from faun import ingest, ordering, output, segmentation
     from faun.detections import Detection, Label, write_detections, STATUS_PSEUDO
+    from faun.sources import resolve_source, source_provenance
 
     if classifier is None:
         classifier = _build_classifier()
@@ -170,8 +180,13 @@ def run_pipeline(
     results_path = job_dir / RESULTS_CSV
     segments_dir = job_dir / SEGMENTS_DIR
 
+    # Resolve the source to a local scannable dir. NEVER Path() a URL: a local
+    # path passes through unchanged; an http(s) zip / Yandex.Disk share is
+    # downloaded + safely extracted under job_dir/_source/ (the P0 fix). A
+    # SourceError here propagates to _execute_job -> job status="error".
+    scan_dir = resolve_source(source_path, job_dir)
     # ingest: scan(path) -> Manifest of AudioFileEntry; stable trap/time order
-    manifest = ordering.sort_entries(ingest.scan(Path(source_path)))
+    manifest = ordering.sort_entries(ingest.scan(scan_dir))
 
     # Sidecar provenance: only claim a trap_id/coords when the batch is
     # single-trap; a mixed batch gets "multi" and no coordinates (honest
@@ -184,6 +199,7 @@ def run_pipeline(
         lat=lat if lat is not None else (first.lat if single else None),
         lon=lon if lon is not None else (first.lon if single else None),
         files=[e.path.name for e in manifest.entries],
+        extra={"source_provenance": source_provenance(source_path)},
     )
 
     extractor = segmentation.SegmentExtractor()
@@ -245,19 +261,24 @@ def run_pipeline(
 def _execute_job(
     job_id: str, source_path: str, lat: Optional[float], lon: Optional[float]
 ) -> None:
-    root = jobs_root()
-    job = jobs.load_job(root, job_id)
-    job.params["progress"] = 0.0
-    jobs.update_status(job, "running")
-    try:
-        results = run_pipeline(job.workdir, source_path, lat, lon)
-        job.params["progress"] = 1.0
-        job.params["results_csv"] = str(Path(results).name)
-        jobs.update_status(job, "done")
-    except Exception as exc:  # noqa: BLE001 — surface any failure in manifest
-        logger.exception("job %s failed", job_id)
-        job.params["error"] = str(exc)
-        jobs.update_status(job, "error")
+    with with_job_context(job_id):
+        root = jobs_root()
+        job = jobs.load_job(root, job_id)
+        job.params["progress"] = 0.0
+        jobs.update_status(job, "running")
+        try:
+            results = run_pipeline(job.workdir, source_path, lat, lon)
+            job.params["progress"] = 1.0
+            job.params["results_csv"] = str(Path(results).name)
+            jobs.update_status(job, "done")
+        except Exception as exc:  # noqa: BLE001 — surface any failure in manifest
+            logger.exception("job failed")  # job_id is a structured log field now
+            job.params["error"] = str(exc)
+            # SourceError carries a stable .kind taxonomy the UI maps to RU labels.
+            kind = getattr(exc, "kind", None)
+            if kind:
+                job.params["error_kind"] = kind
+            jobs.update_status(job, "error")
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +314,9 @@ class LabelRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Faun pipeline API")
+
+# Structured logging configured once at import time (idempotent); JSON by default.
+setup_logging(json=get_settings().log_json)
 
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
