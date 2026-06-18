@@ -35,11 +35,15 @@ from faun.detections import (
     Label,
     write_detections,
 )
-from faun.embeddings import Embedder, EmbeddingCache
+from faun.embeddings import Embedder, EmbeddingCache, _embedder_dim, embed_batch
 from faun.ingest import scan
 from faun.segmentation import SegmentExtractor
 
 __all__ = ["batch_label", "training_candidates"]
+
+#: Классификаторы получают mono @ 16 кГц — тот же контракт SpeciesClassifier,
+#: что и в ``faun.api.run_pipeline`` (НЕ сам объект Segment).
+CLASSIFY_SR = 16_000
 
 #: Имена моделей, образующих консенсус (оба должны согласиться на вид).
 _CONSENSUS_MODELS = ("perch", "birdnet")
@@ -67,6 +71,22 @@ def _slice_segment(waveform: np.ndarray, sr: int, segment) -> np.ndarray:
     start = max(0, int(round(segment.start_s * sr)))
     end = min(len(waveform), int(round(segment.end_s * sr)))
     return waveform[start:end]
+
+
+def _to_classifier_input(clip: np.ndarray, sr: int) -> np.ndarray:
+    """Downmix mono + resample до 16 кГц — вход адаптеров (как в run_pipeline).
+
+    Контракт ``SpeciesClassifier.classify`` принимает waveform-массив на 16 кГц,
+    а НЕ объект ``Segment``; реальные адаптеры (Perch/BirdNET/YAMNet) делают
+    ``np.asarray(segment)`` — поэтому сюда нельзя передавать сам Segment.
+    """
+    import soxr
+
+    mono = clip if clip.ndim == 1 else clip.mean(axis=1)
+    mono = np.asarray(mono, dtype=np.float32)
+    if sr == CLASSIFY_SR:
+        return mono
+    return soxr.resample(mono, sr, CLASSIFY_SR)
 
 
 def _consensus_species(detection: Detection) -> set[str]:
@@ -114,16 +134,22 @@ def batch_label(
 
     detections: list[Detection] = []
     counts: dict[str, int] = {name: 0 for name in models}
+    # Клипы (waveform, sr на исходной частоте), выровненные по строкам с
+    # ``detections`` — собираются в ЕДИНСТВЕННОМ проходе для опц. эмбеддинга.
+    clips: list[tuple[np.ndarray, int]] = []
 
     manifest = scan(Path(archive))
     for entry in manifest.entries:
         waveform, sr = _read_clip(entry.path)
-        segments = extractor.extract(waveform, sr)
-        for segment in segments:
+        for segment in extractor.extract(waveform, sr):
+            clip = _slice_segment(waveform, sr, segment)
+            classifier_input = _to_classifier_input(clip, sr)
             labels: list[Label] = []
             for name, model in models.items():
                 source = _model_source(name)
-                predictions: list[Prediction] = model.classify(segment, sr)
+                predictions: list[Prediction] = model.classify(
+                    classifier_input, CLASSIFY_SR
+                )
                 for pred in predictions:
                     labels.append(
                         Label.from_prediction(pred, source, status=STATUS_PSEUDO)
@@ -137,6 +163,7 @@ def batch_label(
                     labels=labels,
                 )
             )
+            clips.append((clip, sr))
 
     write_detections(out_jsonl, detections)
 
@@ -149,46 +176,21 @@ def batch_label(
         "paths": {"detections": str(out_jsonl)},
     }
 
-    # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера.
+    # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера. Переиспользуем
+    # единый владелец ``embed_batch`` (без повторного чтения/сегментации файлов;
+    # строки выровнены с detections по порядку сбора).
     if emb_out is not None and embedder is not None:
         emb_out = Path(emb_out)
-        rows: list[np.ndarray] = []
-        ids: list[str] = []
-        for det, waveform_sr in _iter_detection_clips(detections, manifest, extractor):
-            waveform, sr, segment = waveform_sr
-            clip = _slice_segment(waveform, sr, segment)
-            rows.append(np.asarray(embedder.embed(clip, sr), dtype=np.float32))
-            ids.append(det.detection_id)
-        dim = int(getattr(embedder, "DIM", None) or getattr(embedder, "dim", 0))
         embeddings = (
-            np.stack(rows).astype(np.float32)
-            if rows
-            else np.zeros((0, dim), dtype=np.float32)
+            embed_batch(clips, embedder)
+            if clips
+            else np.zeros((0, _embedder_dim(embedder)), dtype=np.float32)
         )
+        ids = [det.detection_id for det in detections]
         EmbeddingCache(embeddings=embeddings, ids=ids).save(emb_out)
         summary["paths"]["embeddings"] = str(emb_out)
 
     return summary
-
-
-def _iter_detection_clips(detections, manifest, extractor):
-    """Сопоставить детекции исходным сигналам и сегментам для эмбеддинга.
-
-    Перечитывает каждый файл один раз и переразбивает на сегменты тем же
-    экстрактором, выдавая ``(detection, (waveform, sr, segment))`` в порядке
-    детекций. Порядок детерминирован: детекции строились в этом же порядке.
-    """
-    by_file: dict[str, list[Detection]] = {}
-    for det in detections:
-        by_file.setdefault(det.source_file, []).append(det)
-
-    entries_by_name = {e.path.name: e for e in manifest.entries}
-    for fname, dets in by_file.items():
-        entry = entries_by_name[fname]
-        waveform, sr = _read_clip(entry.path)
-        segments = extractor.extract(waveform, sr)
-        for det, segment in zip(dets, segments):
-            yield det, (waveform, sr, segment)
 
 
 def training_candidates(detections) -> list:

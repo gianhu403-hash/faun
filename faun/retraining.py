@@ -287,6 +287,18 @@ def species_eval(clf, X, y, *, synthetic: bool = True) -> dict:
     y = np.asarray(y)
     labels = sorted(np.unique(y).tolist())
 
+    # Гейт совместимости размерностей: проба и эмбеддер ОБЯЗАНЫ совпадать по DIM.
+    # YAMNet даёт два несовместимых вектора — YAMNetAdapter.embed=1024 (mean) и
+    # YamnetEmbedder=2048 (concat(mean,max)); скрестив их, sklearn упал бы с
+    # невнятной ошибкой. Падаем явно. См. docs/training.md.
+    n_features = getattr(clf, "n_features_in_", None)
+    if n_features is not None and X.ndim == 2 and X.shape[1] != n_features:
+        raise ValueError(
+            f"probe expects {n_features}-dim features but X has {X.shape[1]} — "
+            "train and eval must use the SAME embedder "
+            "(YamnetEmbedder=2048 vs YAMNetAdapter.embed=1024). See docs/training.md."
+        )
+
     y_pred = clf.predict(X)
 
     recalls = recall_score(y, y_pred, labels=labels, average=None, zero_division=0)

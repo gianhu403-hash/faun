@@ -215,15 +215,33 @@ class EmbeddingCache:
 
     @classmethod
     def load(cls, path: str | Path) -> "EmbeddingCache":
-        """Загрузить кэш из ``.npz``, восстановив ids/labels как list[str]."""
-        with np.load(Path(path), allow_pickle=True) as data:
-            embeddings = np.asarray(data["embeddings"], dtype=np.float32)
-            ids = (
-                [str(x) for x in data["ids"].tolist()] if "ids" in data.files else None
-            )
-            labels = (
-                [str(x) for x in data["labels"].tolist()]
-                if "labels" in data.files
-                else None
-            )
+        """Загрузить кэш из ``.npz``, восстановив ids/labels как list[str].
+
+        Битый/усечённый ``.npz`` или отсутствие ключа ``embeddings`` дают явный
+        ``ValueError`` с путём (а не невнятный ``BadZipFile``/``KeyError``) —
+        например при прерванном ``batch_label --emb-out``.
+        """
+        path = Path(path)
+        try:
+            # allow_pickle: .npz — операторский локальный файл, записанный нашим
+            # же save() (object-массивы ids/labels), НЕ сетевой ввод.
+            with np.load(path, allow_pickle=True) as data:
+                if "embeddings" not in data.files:
+                    raise KeyError("missing 'embeddings'")
+                embeddings = np.asarray(data["embeddings"], dtype=np.float32)
+                ids = (
+                    [str(x) for x in data["ids"].tolist()]
+                    if "ids" in data.files
+                    else None
+                )
+                labels = (
+                    [str(x) for x in data["labels"].tolist()]
+                    if "labels" in data.files
+                    else None
+                )
+        except Exception as exc:  # noqa: BLE001 — любой сбой чтения = битый файл
+            # np.load на мусоре кидает разнотипное (BadZipFile/UnpicklingError/
+            # ValueError/EOFError) — всё это означает «кэш повреждён». Цепляем
+            # оригинал через ``from exc`` для отладки.
+            raise ValueError(f"corrupt embedding cache: {path}") from exc
         return cls(embeddings=embeddings, ids=ids, labels=labels)

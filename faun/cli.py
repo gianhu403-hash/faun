@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     evalsp.add_argument("--dataset", required=True, help="iNatSounds dataset root")
     evalsp.add_argument("--embedder", default="perch", choices=["perch", "yamnet"])
     evalsp.add_argument("--seed", type=int, default=42)
+    evalsp.add_argument(
+        "--real",
+        action="store_true",
+        help="dataset is real iNatSounds (cluster) -> emit a REAL species metric; "
+        "default keeps the honest SYNTHETIC tag",
+    )
 
     args = parser.parse_args(argv)
 
@@ -287,11 +293,11 @@ def _embed_split(records, embedder):
 
 
 def _eval_species(args) -> int:
-    """Evaluate a saved probe on a dataset's val split (real species metric).
+    """Evaluate a saved probe on a dataset's val split.
 
-    Heavy path (embedder pulls TF) — runs on the cluster. The printed metric is a
-    REAL species metric only here (``synthetic=False``); synthetic fixtures stay
-    tagged SYNTHETIC by ``species_eval`` itself.
+    Heavy path (embedder pulls TF) — runs on the cluster. Pass ``--real`` only for
+    the true iNatSounds dataset to get a non-SYNTHETIC provenance; without it the
+    result is tagged ``SYNTHETIC — not a species metric`` (honesty default).
     """
     from faun import retraining
     from faun.datasets import iNatSoundsDataset
@@ -301,7 +307,9 @@ def _eval_species(args) -> int:
     _train, val = ds.split(args.seed)
     embedder = _build_embedder(args.embedder)
     X, y = _embed_split(val, embedder)
-    metrics = retraining.species_eval(clf, X, y, synthetic=False)
+    # Honest by default: only --real (true cluster iNatSounds) yields a non-SYNTHETIC
+    # provenance tag — a toy/mini tree must never be reported as a species metric.
+    metrics = retraining.species_eval(clf, X, y, synthetic=not args.real)
     print(metrics)
     return 0
 

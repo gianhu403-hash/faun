@@ -250,5 +250,19 @@ def test_synthetic_embeddings_are_not_species_metrics():
     """
     emb = FakeEmbedder(dim=4)
     out = embed_batch([(np.ones(10, dtype=np.float32), 16000)], emb)
-    mean_value = float(out.mean())  # SYNTHETIC — not a species metric
-    assert isinstance(mean_value, float)
+    # embed_batch really ran on the fake embedder: shape + finite values. The
+    # numbers carry NO species meaning — they are SYNTHETIC by construction.
+    assert out.shape == (1, 4)
+    assert np.all(np.isfinite(out))
+
+
+def test_embedding_cache_load_corrupt_raises_clear_error(tmp_path):
+    """Битый .npz -> понятный ValueError с путём, а не сырой BadZipFile/KeyError."""
+    import pytest
+
+    from faun.embeddings import EmbeddingCache
+
+    bad = tmp_path / "broken.npz"
+    bad.write_bytes(b"not a real npz file")
+    with pytest.raises(ValueError, match="corrupt embedding cache"):
+        EmbeddingCache.load(bad)

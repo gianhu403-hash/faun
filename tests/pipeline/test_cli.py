@@ -134,9 +134,25 @@ def test_eval_species_dispatch(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_build_embedder", lambda name: object())
 
     root = _FIXTURES / "inatsounds_mini"
-    rc = main(["eval-species", "--probe", "/nonexistent.pkl", "--dataset", str(root)])
+
+    # --real -> non-SYNTHETIC provenance (the cluster path).
+    rc = main(
+        [
+            "eval-species",
+            "--probe",
+            "/nonexistent.pkl",
+            "--dataset",
+            str(root),
+            "--real",
+        ]
+    )
     assert rc == 0
     out = capsys.readouterr().out
     assert "macro_f1" in out
-    # synthetic=False here -> NOT tagged as a synthetic provenance string.
     assert "SYNTHETIC" not in out
+
+    # Honest default (no --real) -> result is tagged SYNTHETIC.
+    rc = main(["eval-species", "--probe", "/nonexistent.pkl", "--dataset", str(root)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "SYNTHETIC — not a species metric" in out

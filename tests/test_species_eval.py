@@ -110,3 +110,18 @@ def test_species_eval_confusion_diagonal_dominant_when_separable():
     # На каждой строке диагональ — максимум (класс предсказан верно чаще всего).
     for i in range(confusion.shape[0]):
         assert confusion[i, i] == confusion[i].max()
+
+
+def test_species_eval_rejects_dim_mismatch():
+    """Гейт: проба и эмбеддинги разной размерности -> явный ValueError, не молча.
+
+    Регрессия на YAMNet-несовместимость (YAMNetAdapter.embed=1024 vs
+    YamnetEmbedder=2048): скрестив их, sklearn упал бы невнятно — мы падаем явно.
+    """
+    import pytest
+
+    X, y = _clustered_dataset(n_classes=2, per_class=20, dim=4, seed=3)
+    clf = train_probe(X, y, seed=42)  # n_features_in_ == 4
+    X_wrong = np.zeros((len(y), 8), dtype=float)  # 8 != 4
+    with pytest.raises(ValueError, match="same embedder|expects 4-dim"):
+        retraining.species_eval(clf, X_wrong, y, synthetic=True)

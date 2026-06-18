@@ -96,6 +96,36 @@ class TestTrapsMiniFixture:
         assert summary["n_consensus"] == summary["n_detections"]
 
 
+class _ContractModel:
+    """Классификатор, проверяющий КОНТРАКТ входа: ndarray @ 16 кГц (не Segment)."""
+
+    def __init__(self):
+        self.seen = []
+
+    def classify(self, segment, sr):
+        # Регрессия на блокер: batch_label обязан передавать waveform-массив на
+        # 16 кГц, как в run_pipeline — а НЕ объект Segment.
+        assert isinstance(segment, np.ndarray), (
+            f"got {type(segment).__name__}, not ndarray"
+        )
+        assert segment.ndim == 1, f"expected mono 1-D, got ndim={segment.ndim}"
+        assert sr == 16000, f"expected 16 kHz, got {sr}"
+        self.seen.append(segment.shape)
+        return [Prediction("Turdus merula", 0.9)]
+
+
+def test_batch_label_feeds_classifier_waveform_at_16k(tmp_path):
+    """Контракт: classify получает mono-ndarray @ 16 кГц (регрессия блокера)."""
+    src = tmp_path / "archive"
+    _write_trap(src, "A1", "20260115_083000.wav", sr=48000, seconds=2.0)
+    model = _ContractModel()
+    out = tmp_path / "detections.jsonl"
+    summary = batch_label(src, {"perch": model}, out)
+    # Если бы передавался Segment / неверная sr — assert внутри classify упал бы.
+    assert summary["n_detections"] >= 1
+    assert model.seen, "classify never called"
+
+
 # ---------------------------------------------------------------------------
 # batch_label — happy path + консенсус
 # ---------------------------------------------------------------------------
