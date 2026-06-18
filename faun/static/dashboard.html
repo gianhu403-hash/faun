@@ -11,11 +11,16 @@
 </head>
 <body>
 <main>
-  <h1>Карта ловушек</h1>
-  <p class="sub">Позиции акустических ловушек по загруженным задачам и состояние очереди.</p>
+  <div class="page-head">
+    <h1>Карта ловушек и очередь задач</h1>
+    <p class="sub">Позиции акустических ловушек по загруженным задачам и их текущее состояние. Координаты задаются при загрузке.</p>
+  </div>
 
   <div class="card">
-    <h2>Карта</h2>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l-6 3V6l6-3 6 3 6-3v15l-6 3-6-3Z"/><path d="M9 3v15"/><path d="M15 6v15"/></svg>
+      Карта ловушек
+    </h2>
     <div id="map"></div>
     <div class="empty-state hidden" id="map-empty">
       Ни у одной задачи нет координат ловушки — точки на карте отсутствуют.
@@ -23,17 +28,22 @@
   </div>
 
   <div class="card">
-    <h2>Задачи</h2>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+      Задачи
+    </h2>
     <div class="empty-state hidden" id="jobs-empty">Пока нет задач.</div>
     <div class="err-msg hidden" id="jobs-err"></div>
-    <table id="jobs-table" class="hidden">
-      <thead>
-        <tr>
-          <th>ID</th><th>статус</th><th>источник</th><th>создана</th><th></th>
-        </tr>
-      </thead>
-      <tbody id="jobs-body"></tbody>
-    </table>
+    <div class="table-wrap">
+      <table id="jobs-table" class="hidden">
+        <thead>
+          <tr>
+            <th>ID</th><th>статус</th><th>источник</th><th>создана</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body"></tbody>
+      </table>
+    </div>
   </div>
 </main>
 
@@ -42,6 +52,7 @@
 <script src="/static/app.js"></script>
 <script>
 renderNav("dashboard");
+renderFooter();
 
 let map = null;
 

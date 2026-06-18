@@ -63,3 +63,96 @@ def test_process_passes_source_dir(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(api, "run_pipeline", fake_run_pipeline)
     main(["process", str(src)])
     assert seen["source"] == str(src)
+
+
+# ---------------------------------------------------------------------------
+# Wave-2 integration subcommands: fetch-dataset / batch-label / eval-species
+# ---------------------------------------------------------------------------
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def test_fetch_dataset_on_mini_fixture(capsys):
+    """fetch-dataset validates a real iNatSounds tree (TF-free) and reports vocab."""
+    root = _FIXTURES / "inatsounds_mini"
+    rc = main(["fetch-dataset", "--root", str(root)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "'n_species': 3" in out
+    assert "Turdus_merula" in out
+
+
+def test_batch_label_stub_archive(tmp_path, capsys):
+    """batch-label with the TF-free Stub classifier writes a real detections.jsonl."""
+    from faun.detections import read_detections
+
+    archive = _FIXTURES / "traps_mini"
+    out = tmp_path / "detections.jsonl"
+    rc = main(
+        [
+            "batch-label",
+            "--archive",
+            str(archive),
+            "--out",
+            str(out),
+            "--models",
+            "stub",
+        ]
+    )
+    assert rc == 0
+    assert out.exists()
+    dets = read_detections(out)
+    # The stub yields >=1 label per detection, all sourced model:stub (pseudo).
+    assert dets, "expected at least one detection from the stub run"
+    assert all(
+        lbl.source == "model:stub" and lbl.status == "pseudo"
+        for d in dets
+        for lbl in d.labels
+    )
+
+
+def test_eval_species_dispatch(monkeypatch, capsys):
+    """eval-species routes load_probe -> embed -> species_eval (real eval, TF-free).
+
+    The heavy embed step (_embed_split) and probe load are stubbed; species_eval
+    itself runs for real on synthetic embeddings so the dispatch wiring is exercised.
+    """
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+
+    import faun.cli as cli
+    from faun import retraining
+
+    rng = np.random.default_rng(0)
+    # Two separable clusters per class so the probe actually learns.
+    X = np.vstack([rng.normal(0, 0.1, (8, 4)), rng.normal(5, 0.1, (8, 4))])
+    y = np.array(["a"] * 8 + ["b"] * 8)
+    clf = LogisticRegression(max_iter=500).fit(X, y)
+
+    monkeypatch.setattr(retraining, "load_probe", lambda path: clf)
+    monkeypatch.setattr(cli, "_embed_split", lambda records, embedder: (X, y))
+    monkeypatch.setattr(cli, "_build_embedder", lambda name: object())
+
+    root = _FIXTURES / "inatsounds_mini"
+
+    # --real -> non-SYNTHETIC provenance (the cluster path).
+    rc = main(
+        [
+            "eval-species",
+            "--probe",
+            "/nonexistent.pkl",
+            "--dataset",
+            str(root),
+            "--real",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "macro_f1" in out
+    assert "SYNTHETIC" not in out
+
+    # Honest default (no --real) -> result is tagged SYNTHETIC.
+    rc = main(["eval-species", "--probe", "/nonexistent.pkl", "--dataset", str(root)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "SYNTHETIC — not a species metric" in out

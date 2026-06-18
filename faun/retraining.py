@@ -253,3 +253,79 @@ def retrain_from_labels(labels, audio_dir, model, out_path) -> dict:
         suffix = f"{skipped} label(s) skipped (clip not found)"
         metrics["note"] = f"{metrics['note']}; {suffix}" if metrics["note"] else suffix
     return metrics
+
+
+# Метка происхождения числа, полученного на СИНТЕТИЧЕСКИХ эмбеддингах: это НЕ
+# species-метрика. Реальное число существует только после прогона на кластере
+# на настоящем iNatSounds (scripts/train_inatsounds.sh, synthetic=False).
+_SYNTHETIC_PROVENANCE = "SYNTHETIC — not a species metric"
+
+
+def species_eval(clf, X, y, *, synthetic: bool = True) -> dict:
+    """Оценить мультиклассовую пробу по видам: recall, macro-F1, confusion + CV.
+
+    Считает per-species recall (``recall_score(average=None)``), macro-F1
+    (``f1_score(average='macro')``) и матрицу ошибок (``confusion_matrix``) на
+    переданных ``(X, y)``, а также CV-оценку с 95% CI, переиспользуя
+    :func:`train_probe_cv` (логика кросс-валидации не дублируется).
+
+    Гейт честности: при ``synthetic=True`` (по умолчанию — путь юнит-тестов и
+    синтетических эмбеддингов) ключ ``provenance`` равен
+    ``"SYNTHETIC — not a species metric"``. Реальное species-число получают
+    только с ``synthetic=False`` на настоящем iNatSounds (на кластере).
+
+    Чистый numpy/sklearn — TensorFlow здесь не импортируется.
+
+    Returns ``dict`` с ключами как минимум: ``per_species_recall`` (dict),
+    ``macro_f1`` (float), ``confusion`` (2D list), ``labels`` (упорядоченный
+    список классов), ``n``, ``n_classes``, ``provenance``, ``note`` (+ CV-поля
+    ``metric``/``value``/``ci_low``/``ci_high`` из :func:`train_probe_cv`).
+    """
+    from sklearn.metrics import confusion_matrix, f1_score, recall_score
+
+    X = np.asarray(X)
+    y = np.asarray(y)
+    labels = sorted(np.unique(y).tolist())
+
+    # Гейт совместимости размерностей: проба и эмбеддер ОБЯЗАНЫ совпадать по DIM.
+    # YAMNet даёт два несовместимых вектора — YAMNetAdapter.embed=1024 (mean) и
+    # YamnetEmbedder=2048 (concat(mean,max)); скрестив их, sklearn упал бы с
+    # невнятной ошибкой. Падаем явно. См. docs/training.md.
+    n_features = getattr(clf, "n_features_in_", None)
+    if n_features is not None and X.ndim == 2 and X.shape[1] != n_features:
+        raise ValueError(
+            f"probe expects {n_features}-dim features but X has {X.shape[1]} — "
+            "train and eval must use the SAME embedder "
+            "(YamnetEmbedder=2048 vs YAMNetAdapter.embed=1024). See docs/training.md."
+        )
+
+    y_pred = clf.predict(X)
+
+    recalls = recall_score(y, y_pred, labels=labels, average=None, zero_division=0)
+    per_species_recall = {
+        species: float(value) for species, value in zip(labels, recalls)
+    }
+    macro_f1 = float(
+        f1_score(y, y_pred, labels=labels, average="macro", zero_division=0)
+    )
+    confusion = confusion_matrix(y, y_pred, labels=labels).tolist()
+
+    # CV-оценка с CI — переиспользуем общий контур, не дублируя StratifiedKFold.
+    _clf_cv, cv_metrics = train_probe_cv(X, y)
+
+    provenance = _SYNTHETIC_PROVENANCE if synthetic else "real-eval"
+
+    return {
+        "per_species_recall": per_species_recall,
+        "macro_f1": macro_f1,
+        "confusion": confusion,
+        "labels": labels,
+        "n": int(len(y)),
+        "n_classes": len(labels),
+        "provenance": provenance,
+        "metric": cv_metrics["metric"],
+        "value": cv_metrics["value"],
+        "ci_low": cv_metrics["ci_low"],
+        "ci_high": cv_metrics["ci_high"],
+        "note": cv_metrics["note"],
+    }

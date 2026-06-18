@@ -1,0 +1,2 @@
+date,time,long,lat,battery,temp,humidity,filename,sample_rate,gain,channel
+2026-01-15,08:30:00,44.150,57.420,85,12.5,60,20260115_090000.wav,16000,auto,mono
