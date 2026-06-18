@@ -8,46 +8,55 @@
 </head>
 <body>
 <main>
-  <h1>Faun — биоакустический pipeline</h1>
-  <p class="sub">Обработка записей с акустических ловушек: сегментация и определение видов.</p>
-
-  <div class="card">
-    <form id="job-form">
-      <label for="source">Папка с записями или URL</label>
-      <input id="source" name="source" placeholder="/data/traps/A1 или https://…" required />
-      <div class="row">
-        <div>
-          <label for="lat">Широта (lat)</label>
-          <input id="lat" name="lat" type="number" step="any" placeholder="опц." />
-        </div>
-        <div>
-          <label for="lon">Долгота (lon)</label>
-          <input id="lon" name="lon" type="number" step="any" placeholder="опц." />
-        </div>
-      </div>
-      <button type="submit" id="submit-btn">Запустить обработку</button>
-      <div class="err-msg hidden" id="form-err"></div>
-    </form>
+  <div class="page-head">
+    <h1>Обработка записей с ловушек</h1>
+    <p class="sub">Загрузите архив или папку с записями акустических ловушек. Система выделит звуковые события, определит виды птиц и подготовит CSV с таймкодами и вероятностями.</p>
   </div>
 
-  <div class="card hidden" id="status-card">
-    <div class="status">
-      Задача <code id="job-id"></code> —
-      <span class="badge pending" id="badge">pending</span>
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>Новая задача</h2>
+      <p class="card__hint">Укажите путь к папке ловушки или URL. Координаты опциональны — они показывают точку на карте.</p>
+      <form id="job-form">
+        <label for="source">Папка с записями или URL</label>
+        <input id="source" name="source" placeholder="/data/traps/A1 или https://…" required />
+        <div class="row">
+          <div>
+            <label for="lat">Широта (lat)</label>
+            <input id="lat" name="lat" type="number" step="any" placeholder="опц." />
+          </div>
+          <div>
+            <label for="lon">Долгота (lon)</label>
+            <input id="lon" name="lon" type="number" step="any" placeholder="опц." />
+          </div>
+        </div>
+        <button type="submit" id="submit-btn">Запустить обработку</button>
+        <div class="err-msg hidden" id="form-err"></div>
+      </form>
     </div>
-    <progress id="bar" max="1" value="0"></progress>
-    <div class="queue hidden" id="queue"></div>
-    <div class="err-msg hidden" id="run-err"></div>
-    <table id="results" class="hidden">
-      <thead>
-        <tr><th>track</th><th>start, с</th><th>длит., с</th><th>вид</th><th>вероятность</th></tr>
-      </thead>
-      <tbody id="results-body"></tbody>
-    </table>
-    <div id="done-actions" class="hidden">
-      <a class="dl" id="dl-link" download>Скачать CSV</a>
-      &nbsp;·&nbsp;
-      <a class="cta" id="review-link">Открыть переразметку</a>
+
+    <div class="card hidden" id="status-card">
+      <h2>Состояние задачи</h2>
+      <div class="status">
+        <span>Задача</span>
+        <code id="job-id"></code>
+        <span class="badge pending" id="badge">pending</span>
+      </div>
+      <progress id="bar" max="1" value="0"></progress>
+      <div class="queue hidden" id="queue"></div>
+      <div class="err-msg hidden" id="run-err"></div>
+      <div class="table-wrap">
+        <table id="results" class="hidden">
+          <thead>
+            <tr><th>track</th><th>start, с</th><th>длит., с</th><th>вид</th><th>вероятность</th></tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+      <div id="done-actions" class="hidden">
+        <a class="dl" id="dl-link" download>Скачать CSV</a>
+        <a class="cta" id="review-link">Открыть переразметку</a>
+      </div>
     </div>
   </div>
 </main>
@@ -58,6 +67,7 @@ let pollTimer = null;
 let pollFails = 0;
 
 renderNav("upload");
+renderFooter();
 
 $("job-form").addEventListener("submit", async (e) => {
   e.preventDefault();

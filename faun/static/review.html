@@ -8,14 +8,24 @@
 </head>
 <body>
 <main>
-  <h1>Переразметка детекций</h1>
-  <p class="sub">Прослушивание реальных аудиофрагментов и исправление вида лесником.</p>
+  <div class="page-head">
+    <h1>Переразметка детекций</h1>
+    <p class="sub">Прослушивание реальных аудиофрагментов и подтверждение или исправление вида лесником. Это шаг ручной проверки — звук всегда оригинальный фрагмент записи.</p>
+  </div>
 
   <!-- Job picker: shown only when ?job is absent. -->
   <div class="card hidden" id="picker-card">
-    <label for="job-select">Выберите задачу</label>
-    <select id="job-select"></select>
-    <button class="inline" id="open-job-btn" type="button">Открыть</button>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18"/><path d="M6 12h12"/><path d="M10 17h4"/></svg>
+      Выберите задачу
+    </h2>
+    <div class="picker-row">
+      <div>
+        <label for="job-select">Задача</label>
+        <select id="job-select"></select>
+      </div>
+      <button class="inline" id="open-job-btn" type="button">Открыть</button>
+    </div>
     <div class="empty-state hidden" id="picker-empty">Пока нет задач.</div>
   </div>
 
@@ -27,29 +37,36 @@
   </template>
 
   <div class="card hidden" id="det-card">
-    <div class="status">Задача <code id="job-id"></code></div>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h3l3 8 4-16 3 8h5"/></svg>
+      Детекции
+    </h2>
+    <div class="status"><span>Задача</span> <code id="job-id"></code></div>
     <div class="err-msg hidden" id="load-err"></div>
     <div class="empty-state hidden" id="det-empty">
       Для этой задачи нет детекций.
     </div>
-    <table id="det-table" class="hidden">
-      <thead>
-        <tr>
-          <th>ловушка</th>
-          <th>время</th>
-          <th>аудио</th>
-          <th>текущая метка</th>
-          <th>переразметка</th>
-        </tr>
-      </thead>
-      <tbody id="det-body"></tbody>
-    </table>
+    <div class="table-wrap">
+      <table id="det-table" class="hidden">
+        <thead>
+          <tr>
+            <th>ловушка</th>
+            <th>время</th>
+            <th>аудио</th>
+            <th>текущая метка</th>
+            <th>переразметка</th>
+          </tr>
+        </thead>
+        <tbody id="det-body"></tbody>
+      </table>
+    </div>
   </div>
 </main>
 
 <script src="/static/app.js"></script>
 <script>
 renderNav("review");
+renderFooter();
 
 let JOB_ID = null;
 
