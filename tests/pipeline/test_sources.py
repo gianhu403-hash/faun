@@ -369,3 +369,329 @@ def test_is_url_and_is_yandex_disk() -> None:
     assert _is_yandex_disk(YA_SUB)
     assert _is_yandex_disk("https://yadi.sk/d/abc/A1")
     assert not _is_yandex_disk(GENERIC_ZIP_URL)
+
+
+# ---------------------------------------------------------------------------
+# 5. Generic (non-Yandex) http(s) URLs are a first-class, WORKING feature.
+# ---------------------------------------------------------------------------
+
+
+def _public_dns(host_to_ip: dict[str, str] | None = None):
+    """Build a fake getaddrinfo resolving hosts to public (or given) IPs."""
+    host_to_ip = host_to_ip or {}
+
+    def fake_getaddrinfo(host, *a, **kw):
+        ip = host_to_ip.get(host, "93.184.216.34")  # public IP by default
+        return [(socket.AF_INET, None, None, "", (ip, 0))]
+
+    return fake_getaddrinfo
+
+
+GENERIC_HOST_URL = "https://files.example.com/traps.zip"
+
+
+def test_generic_url_success_no_ssrf_rejection(tmp_path: Path, monkeypatch) -> None:
+    # Headline fix: a generic user-supplied URL whose final host is a non-Yandex
+    # public host must resolve, NOT be allowlist-rejected.
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = FakeClient(
+        final_url=GENERIC_HOST_URL,
+        stream_body=_flat_wav_zip(["a.wav", "b.wav"]),
+    )
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert out.is_dir()
+    from faun.ingest import scan
+
+    manifest = scan(out)
+    assert len(manifest.entries) == 2
+
+
+def test_generic_url_to_internal_host_still_blocked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        sources.socket,
+        "getaddrinfo",
+        _public_dns({"files.example.com": "100.64.0.1"}),
+    )
+    client = FakeClient(
+        final_url=GENERIC_HOST_URL, stream_body=_flat_wav_zip(["a.wav"])
+    )
+    with pytest.raises(SourceError) as exc:
+        resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert exc.value.kind == "ssrf"
+
+
+def test_generic_url_to_loopback_still_blocked(tmp_path: Path) -> None:
+    with pytest.raises(SourceError) as exc:
+        resolve_source("http://127.0.0.1/traps.zip", tmp_path, client=FakeClient())
+    assert exc.value.kind == "ssrf"
+
+
+# ---------------------------------------------------------------------------
+# 6. Manual redirect following: every hop validated BEFORE the request.
+# ---------------------------------------------------------------------------
+
+
+class _RedirectClient:
+    """Returns a 3xx (Location) first, then a 200 with the body.
+
+    Records every URL passed to ``stream`` so a test can assert the internal hop
+    was never actually requested.
+    """
+
+    def __init__(self, *, location: str, body: bytes, redirect_status: int = 302):
+        self.location = location
+        self.body = body
+        self.redirect_status = redirect_status
+        self.stream_calls: list[str] = []
+        self._served_redirect = False
+
+    def stream(self, method: str, url: str, **kw):
+        self.stream_calls.append(url)
+        if not self._served_redirect:
+            self._served_redirect = True
+            resp = _FakeStreamResponse(url, status=self.redirect_status, body=b"")
+            resp.headers = {"Location": self.location}
+            return resp
+        return _FakeStreamResponse(url, status=200, body=self.body)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+
+def test_redirect_hop_to_internal_ip_blocked_before_request(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = _RedirectClient(
+        location="http://169.254.169.254/latest/meta-data",
+        body=_flat_wav_zip(["a.wav"]),
+    )
+    with pytest.raises(SourceError) as exc:
+        resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert exc.value.kind == "ssrf"
+    # the redirect was served, but the internal hop GET must NOT have been issued
+    assert client.stream_calls == [GENERIC_HOST_URL]
+    assert "169.254.169.254" not in " ".join(client.stream_calls)
+
+
+def test_redirect_to_public_host_followed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = _RedirectClient(
+        location="https://cdn.example.org/real.zip",
+        body=_flat_wav_zip(["a.wav", "b.wav"]),
+    )
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert out.is_dir()
+    # both hops issued: original + redirect target
+    assert client.stream_calls == [
+        GENERIC_HOST_URL,
+        "https://cdn.example.org/real.zip",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 7. IPv4-mapped IPv6 must be unwrapped before the block check.
+# ---------------------------------------------------------------------------
+
+
+def test_ipv4_mapped_ipv6_cgnat_blocked(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        sources.socket,
+        "getaddrinfo",
+        lambda *a, **kw: [(socket.AF_INET6, None, None, "", ("::ffff:100.64.0.1", 0))],
+    )
+    with pytest.raises(SourceError) as exc:
+        resolve_source(GENERIC_HOST_URL, tmp_path, client=FakeClient())
+    assert exc.value.kind == "ssrf"
+
+
+# ---------------------------------------------------------------------------
+# 8. Zip-bomb enforced DURING extraction (declared size lies).
+# ---------------------------------------------------------------------------
+
+
+def _zip_compressible(real_bytes: int) -> bytes:
+    """A real, valid, highly compressible member (inflates to ``real_bytes``)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("big.wav", b"\0" * real_bytes)
+    return buf.getvalue()
+
+
+def test_zip_bomb_cheap_precheck_rejects(tmp_path: Path, monkeypatch) -> None:
+    # End-to-end: a real oversized member is rejected too-large by _extract.
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    monkeypatch.setenv("FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", "1024")
+    blob = _zip_compressible(64 * 1024)
+    client = FakeClient(final_url=GENERIC_HOST_URL, stream_body=blob)
+    with pytest.raises(SourceError) as exc:
+        resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert exc.value.kind == "too-large"
+
+
+def test_zip_bomb_enforced_during_extraction(tmp_path: Path, monkeypatch) -> None:
+    # Authoritative cap = streamed-bytes counter, NOT declared file_size.
+    # Simulate an attacker who under-declares: the cheap pre-check sees a large cap
+    # (passes), but the running streamed counter must still abort. We drive that by
+    # making _int_env return a generous cap on the pre-check read and a tiny cap on
+    # the streamed read, proving line 440's branch is the load-bearing control.
+    big_zip = tmp_path / "big.zip"
+    big_zip.write_bytes(_zip_compressible(64 * 1024))
+    dest = tmp_path / "out"
+
+    real_int_env = sources._int_env
+    calls = {"n": 0}
+
+    def staged_int_env(name, default):
+        if name == "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES":
+            calls["n"] += 1
+            # 1st read = streamed cap (tiny), 2nd read = cheap pre-check (generous)
+            return 1024 if calls["n"] == 1 else 10 * 1024 * 1024
+        return real_int_env(name, default)
+
+    monkeypatch.setattr(sources, "_int_env", staged_int_env)
+    with pytest.raises(SourceError) as exc:
+        sources._extract(big_zip, dest)
+    assert exc.value.kind == "too-large"
+    assert calls["n"] >= 2, "streamed cap path must be reached after the pre-check"
+
+
+# ---------------------------------------------------------------------------
+# 9. download.zip removed after a successful extract.
+# ---------------------------------------------------------------------------
+
+
+def test_download_archive_removed_after_success(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = FakeClient(
+        final_url=GENERIC_HOST_URL, stream_body=_flat_wav_zip(["a.wav"])
+    )
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert out.is_dir()
+    # extracted tree present; the archive file is gone.
+    archives = list((tmp_path / "_source").rglob("download.zip"))
+    assert archives == []
+    wavs = list((tmp_path / "_source").rglob("*.wav"))
+    assert wavs, "extracted tree must remain"
+
+
+# ---------------------------------------------------------------------------
+# 10. _single_root nested-single-dir unwrap.
+# ---------------------------------------------------------------------------
+
+
+def _nested_traps_zip() -> bytes:
+    buf = io.BytesIO()
+    payload = _wav_bytes()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("traps/A1/rec1.wav", payload)
+        zf.writestr("traps/A2/rec2.wav", payload)
+    return buf.getvalue()
+
+
+def _nested_traps_with_stray_file_zip() -> bytes:
+    buf = io.BytesIO()
+    payload = _wav_bytes()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("traps/A1/rec1.wav", payload)
+        zf.writestr("README.txt", b"hi")
+    return buf.getvalue()
+
+
+def test_single_root_unwraps_nested_traps_dir(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = FakeClient(final_url=GENERIC_HOST_URL, stream_body=_nested_traps_zip())
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert out.name == "traps"
+    from faun.ingest import scan
+
+    manifest = scan(out)
+    trap_ids = {e.trap_id for e in manifest.entries}
+    assert {"A1", "A2"} <= trap_ids
+
+
+def test_single_root_does_not_unwrap_with_stray_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = FakeClient(
+        final_url=GENERIC_HOST_URL,
+        stream_body=_nested_traps_with_stray_file_zip(),
+    )
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    # a dir + a stray top-level file -> NOT unwrapped (root kept).
+    assert out.name != "traps"
+    assert (out / "traps").is_dir()
+    assert (out / "README.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# 11. Retry then RECOVER (503 then 200).
+# ---------------------------------------------------------------------------
+
+
+class _FlakyClient:
+    """Streams a 503 on the first call, then a 200 with the body."""
+
+    def __init__(self, *, final_url: str, body: bytes):
+        self.final_url = final_url
+        self.body = body
+        self.stream_calls: list[str] = []
+        self._n = 0
+
+    def stream(self, method: str, url: str, **kw):
+        self.stream_calls.append(url)
+        self._n += 1
+        status = 503 if self._n == 1 else 200
+        body = b"" if status == 503 else self.body
+        return _FakeStreamResponse(self.final_url, status=status, body=body)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return None
+
+
+def test_retry_then_recover(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sources, "_BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = _FlakyClient(final_url=GENERIC_HOST_URL, body=_flat_wav_zip(["a.wav"]))
+    out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    assert out.is_dir()
+    assert len(client.stream_calls) >= 2
+
+
+# ---------------------------------------------------------------------------
+# 12. Absolute-path zip member must not escape dest.
+# ---------------------------------------------------------------------------
+
+
+def _abs_path_zip() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("/tmp/pwned.wav", b"pwned")
+    return buf.getvalue()
+
+
+def test_absolute_path_member_does_not_escape(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _public_dns())
+    client = FakeClient(final_url=GENERIC_HOST_URL, stream_body=_abs_path_zip())
+    sentinel = Path("/tmp/pwned.wav")  # noqa: S108 - test sentinel only
+    existed_before = sentinel.exists()
+    try:
+        out = resolve_source(GENERIC_HOST_URL, tmp_path, client=client)
+    except SourceError as exc:
+        # blocked outright is acceptable (zip-slip / similar)
+        assert exc.kind in {"zip-slip", "not-an-archive", "too-large"}
+        assert not (sentinel.exists() and not existed_before)
+        return
+    # if it did extract, the member must land strictly inside dest, never at /tmp.
+    landed = list(Path(out).rglob("pwned.wav"))
+    assert landed, "member must be confined inside dest"
+    assert not (sentinel.exists() and not existed_before)

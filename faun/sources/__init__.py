@@ -6,21 +6,36 @@ collapses ``//`` and silently produces a bogus relative path; ingest then fails.
 :func:`resolve_source` instead:
 
 * passes an **existing local path** straight through (never ``Path()`` on a URL);
-* for an ``http(s)`` URL or a Yandex.Disk share, downloads + safely extracts an
-  archive under ``workdir/_source/`` and returns the local extraction dir.
+* for a generic ``http(s)`` archive URL or a Yandex.Disk share, downloads + safely
+  extracts an archive under ``workdir/_source/`` and returns the local extraction
+  dir. Generic user-supplied URLs are first-class: the user chose the host, so the
+  SSRF IP guard on the (manually followed) redirect chain is the control — there is
+  **no** host allowlist on the generic path.
 
 Security is merge-blocking:
 
-* **SSRF** — every target host is resolved to IP(s) via ``socket.getaddrinfo``
-  and rejected if any IP is private / loopback / link-local / CGNAT
-  (``100.64.0.0/10`` is the cluster tailnet). Re-checked after every redirect via
-  the response's *final* URL. A scheme allowlist alone is not enough.
+* **SSRF** — every target host (initial + *every* redirect hop) is resolved to
+  IP(s) via ``socket.getaddrinfo`` and rejected if any IP is private / loopback /
+  link-local / reserved / CGNAT (``100.64.0.0/10`` is the cluster tailnet).
+  Redirects are followed **manually** (``follow_redirects=False``): each hop's
+  ``Location`` is validated *before* the next request is issued, so we never touch
+  an internal host even once.
+* **Allowlist (Yandex path only)** — a Yandex.Disk download href comes from the
+  Yandex API and could redirect anywhere, so for that path the final/redirect
+  hosts must additionally be in the Yandex data-host allowlist. For a generic URL
+  the user owns the host, so no allowlist is applied. Because DNS-rebind TOCTOU
+  (``getaddrinfo`` vs the socket httpx actually connects) is a known residual, the
+  IP guard is **best-effort**; for the Yandex path the host allowlist is the
+  load-bearing control.
 * **Size** — enforced *during* streaming; the download aborts mid-stream once the
   cap is exceeded.
-* **Zip-bomb** — both total uncompressed size and entry count are bounded.
+* **Zip-bomb** — entry count is bounded and the uncompressed cap is enforced
+  *during* extraction by a running counter of bytes actually written (declared
+  ``file_size`` is only a cheap fast-reject, never the authoritative cap).
 * **Zip-slip** — any member resolving outside the destination dir is refused and
   nothing is written outside ``dest``.
-* **Cleanup** — ``workdir/_source/`` is removed on any failure.
+* **Cleanup** — ``workdir/_source/`` is removed on any failure; on success the
+  downloaded archive is deleted immediately (only the unpacked tree is kept).
 
 Heavy import (``httpx``) is module-level here because httpx is a core pipeline
 dependency (requirements-pipeline.txt); TF-class deps are not pulled in.
@@ -145,6 +160,10 @@ def _host_of(url: str) -> str:
 
 def _ip_is_blocked(ip: ipaddress._BaseAddress) -> bool:
     """Reject loopback / private / link-local / reserved / CGNAT addresses."""
+    # An IPv4-mapped IPv6 (``::ffff:100.64.0.1``) must be judged on its embedded
+    # IPv4: stdlib flags it neither private nor CGNAT in the v6 form.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
     if (
         ip.is_private
         or ip.is_loopback
@@ -158,6 +177,9 @@ def _ip_is_blocked(ip: ipaddress._BaseAddress) -> bool:
     if isinstance(ip, ipaddress.IPv4Address) and ip in ipaddress.ip_network(
         "100.64.0.0/10"
     ):
+        return True
+    # Belt-and-suspenders: refuse any non-global address that slipped the above.
+    if not ip.is_global:
         return True
     return False
 
@@ -257,47 +279,87 @@ def _resolve_yandex_href(src: str, client: httpx.Client) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _download(href: str, dest_file: Path, client: httpx.Client) -> None:
+def _validate_hop(url: str, *, is_yandex: bool) -> None:
+    """SSRF-validate one URL we are about to request.
+
+    Always enforces the IP guard. For the Yandex path the host must additionally
+    be allowlisted (the href came from the Yandex API and could redirect anywhere).
+    """
+    host = _assert_public_host(url)
+    if is_yandex and not _host_allowlisted(host):
+        raise SourceError(f"download host not allowlisted: {host}", kind="ssrf")
+
+
+def _stream_to_file(
+    href: str, dest_file: Path, client: httpx.Client, *, is_yandex: bool
+) -> None:
+    """Follow redirects MANUALLY and stream the final 2xx body to ``dest_file``.
+
+    Every hop (initial href + each ``Location``) is SSRF-validated *before* the
+    request that targets it is issued, bounded by ``FAUN_SOURCE_MAX_REDIRECTS``.
+    Raises ``SourceError`` (``network`` is retryable upstream).
+    """
+    max_bytes = _int_env("FAUN_SOURCE_MAX_BYTES", _DEFAULT_MAX_BYTES)
+    max_redirects = _int_env("FAUN_SOURCE_MAX_REDIRECTS", _DEFAULT_MAX_REDIRECTS)
+
+    url = href
+    for _ in range(max_redirects + 1):
+        # Validate the host we are ABOUT to hit, before issuing the request.
+        _validate_hop(url, is_yandex=is_yandex)
+        with client.stream("GET", url) as resp:
+            status = getattr(resp, "status_code", 200)
+            if 300 <= status < 400:
+                location = resp.headers.get("Location") or resp.headers.get("location")
+                if not location:
+                    raise SourceError(
+                        f"redirect {status} without Location", kind="network"
+                    )
+                # Resolve a relative Location against the current absolute URL.
+                url = str(httpx.URL(url).join(location))
+                continue
+            if status >= 500:
+                raise SourceError(f"upstream {status}", kind="network")
+            if status >= 400:
+                raise SourceError(f"upstream {status}", kind="not-found")
+
+            # Defence in depth: if the transport still surfaced a different final
+            # URL (a redirect we did not drive), validate it before reading body.
+            final_url = str(getattr(resp, "url", url))
+            if final_url and final_url != url:
+                _validate_hop(final_url, is_yandex=is_yandex)
+
+            written = 0
+            with open(dest_file, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise SourceError(
+                            f"download exceeds {max_bytes} bytes", kind="too-large"
+                        )
+                    fh.write(chunk)
+            if written == 0:
+                raise SourceError("downloaded empty body", kind="empty")
+            return
+
+    raise SourceError(f"too many redirects (> {max_redirects})", kind="network")
+
+
+def _download(
+    href: str, dest_file: Path, client: httpx.Client, *, is_yandex: bool
+) -> None:
     """Stream ``href`` to ``dest_file`` with size enforcement + SSRF re-check.
 
     Bounded exponential backoff retries on 5xx / timeout. Aborts mid-stream once
-    ``FAUN_SOURCE_MAX_BYTES`` is exceeded.
+    ``FAUN_SOURCE_MAX_BYTES`` is exceeded. Redirects are followed manually so that
+    every hop is SSRF-checked before being requested (see :func:`_stream_to_file`).
     """
     import time
 
-    max_bytes = _int_env("FAUN_SOURCE_MAX_BYTES", _DEFAULT_MAX_BYTES)
     last_err: Exception | None = None
 
     for attempt in range(_MAX_RETRIES):
         try:
-            with client.stream("GET", href) as resp:
-                # Re-check the FINAL host after any redirect; do not trust the
-                # first href alone. Allowlist gate + IP resolution.
-                final_url = str(resp.url)
-                final_host = _host_of(final_url)
-                _assert_public_host(final_url)
-                if not _host_allowlisted(final_host):
-                    raise SourceError(
-                        f"download host not allowlisted: {final_host}", kind="ssrf"
-                    )
-                status = getattr(resp, "status_code", 200)
-                if status >= 500:
-                    last_err = SourceError(f"upstream {status}", kind="network")
-                    raise last_err
-                if status >= 400:
-                    raise SourceError(f"upstream {status}", kind="not-found")
-
-                written = 0
-                with open(dest_file, "wb") as fh:
-                    for chunk in resp.iter_bytes():
-                        written += len(chunk)
-                        if written > max_bytes:
-                            raise SourceError(
-                                f"download exceeds {max_bytes} bytes", kind="too-large"
-                            )
-                        fh.write(chunk)
-            if written == 0:
-                raise SourceError("downloaded empty body", kind="empty")
+            _stream_to_file(href, dest_file, client, is_yandex=is_yandex)
             return
         except SourceError as exc:
             if exc.kind == "network" and attempt < _MAX_RETRIES - 1:
@@ -343,10 +405,16 @@ def _extract(archive: Path, dest: Path) -> None:
             raise SourceError(
                 f"archive has {len(infos)} entries (> {max_entries})", kind="too-large"
             )
-        total = sum(info.file_size for info in infos)
-        if total > max_uncompressed:
+        # Cheap fast-reject on the attacker-declared sizes; NOT the authoritative
+        # cap (a zip-bomb can lie). The hard cap below counts bytes we actually
+        # write while streaming each member.
+        declared = sum(info.file_size for info in infos)
+        precheck_cap = _int_env(
+            "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", _DEFAULT_MAX_UNCOMPRESSED
+        )
+        if declared > precheck_cap:
             raise SourceError(
-                f"archive uncompressed {total} bytes (> {max_uncompressed})",
+                f"archive uncompressed {declared} bytes (> {precheck_cap})",
                 kind="too-large",
             )
         # Validate ALL member paths before writing anything (zip-slip).
@@ -357,7 +425,27 @@ def _extract(archive: Path, dest: Path) -> None:
                     f"refusing zip member outside dest: {info.filename!r}",
                     kind="zip-slip",
                 )
-        zf.extractall(dest)
+        # Authoritative cap: stream each member and abort once the cumulative
+        # bytes actually written exceed the cap.
+        written_total = 0
+        for info in infos:
+            target = (dest / info.filename).resolve()
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as out:
+                while True:
+                    chunk = src.read(65536)
+                    if not chunk:
+                        break
+                    written_total += len(chunk)
+                    if written_total > max_uncompressed:
+                        raise SourceError(
+                            f"archive uncompressed > {max_uncompressed} bytes",
+                            kind="too-large",
+                        )
+                    out.write(chunk)
 
 
 def _single_root(directory: Path) -> Path:
@@ -423,10 +511,9 @@ def resolve_source(src: str, workdir: Path, *, client: Any = None) -> Path:
     owns_client = client is None
     if owns_client:
         timeout = _float_env("FAUN_SOURCE_TIMEOUT_S", _DEFAULT_TIMEOUT_S)
-        max_redirects = _int_env("FAUN_SOURCE_MAX_REDIRECTS", _DEFAULT_MAX_REDIRECTS)
-        client = httpx.Client(
-            follow_redirects=True, timeout=timeout, max_redirects=max_redirects
-        )
+        # follow_redirects=False: we follow + SSRF-validate each hop ourselves so
+        # httpx never connects to an internal host on our behalf.
+        client = httpx.Client(follow_redirects=False, timeout=timeout)
 
     try:
         if source_root.exists():
@@ -434,13 +521,17 @@ def resolve_source(src: str, workdir: Path, *, client: Any = None) -> Path:
         archive_dir.mkdir(parents=True, exist_ok=True)
         archive_file = archive_dir / "download.zip"
 
-        if _is_yandex_disk(src):
+        is_yandex = _is_yandex_disk(src)
+        if is_yandex:
             href = _resolve_yandex_href(src, client)
         else:
             href = src
 
-        _download(href, archive_file, client)
+        _download(href, archive_file, client, is_yandex=is_yandex)
         _extract(archive_file, extract_dir)
+        # The unpacked tree is all ingest needs; drop the archive (~tens of GB for
+        # real trap folders). Keep the extracted tree — run_pipeline reads it.
+        archive_file.unlink(missing_ok=True)
         return _single_root(extract_dir)
     except SourceError:
         if source_root.exists():
