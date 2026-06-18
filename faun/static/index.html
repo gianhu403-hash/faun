@@ -20,6 +20,10 @@
       <form id="job-form">
         <label for="source">Папка с записями или URL</label>
         <input id="source" name="source" placeholder="/data/traps/A1 или https://…" required />
+        <div class="source-hint" id="source-hint" aria-live="polite">
+          <span class="chip" id="source-hint-chip">папка</span>
+          <span class="source-hint__note" id="source-hint-note">локальная папка ловушки</span>
+        </div>
         <div class="row">
           <div>
             <label for="lat">Широта (lat)</label>
@@ -42,6 +46,7 @@
         <code id="job-id"></code>
         <span class="badge pending" id="badge">pending</span>
       </div>
+      <div class="status-phase hidden" id="status-phase"></div>
       <progress id="bar" max="1" value="0"></progress>
       <div class="queue hidden" id="queue"></div>
       <div class="err-msg hidden" id="run-err"></div>
@@ -69,6 +74,14 @@ let pollFails = 0;
 renderNav("upload");
 renderFooter();
 
+/* Track the source kind of the job currently being polled so the status text
+   can honestly say "downloading source" for a remote job vs "processing". */
+let activeSourceKind = "folder";
+
+/* Live source-type hint (chip + note) — logic lives in app.js (renderSourceHint). */
+$("source").addEventListener("input", renderSourceHint);
+renderSourceHint();
+
 $("job-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("form-err").classList.add("hidden");
@@ -78,6 +91,7 @@ $("job-form").addEventListener("submit", async (e) => {
   const lat = $("lat").value ? parseFloat($("lat").value) : null;
   const lon = $("lon").value ? parseFloat($("lon").value) : null;
   const body = { source_path: source, lat, lon };
+  activeSourceKind = sourceKind(source);
 
   try {
     const { job_id } = await postJSON("/jobs", body);
@@ -96,6 +110,7 @@ function startPolling(jobId) {
   $("done-actions").classList.add("hidden");
   $("run-err").classList.add("hidden");
   $("queue").classList.add("hidden");
+  $("status-phase").classList.add("hidden");
 
   if (pollTimer) clearInterval(pollTimer);
   pollFails = 0;
@@ -158,8 +173,10 @@ async function poll(jobId) {
 
   if (m.status === "running" || m.status === "pending") {
     refreshQueue();
+    renderPhase(m);
   } else {
     $("queue").classList.add("hidden");
+    $("status-phase").classList.add("hidden");
   }
 
   if (m.status === "done") {
@@ -171,10 +188,30 @@ async function poll(jobId) {
     $("submit-btn").disabled = false;
   } else if (m.status === "error") {
     clearInterval(pollTimer);
-    $("run-err").textContent = "Ошибка: " + (m.error || "неизвестно");
-    $("run-err").classList.remove("hidden");
+    $("status-phase").classList.add("hidden");
+    renderError(m);
     $("submit-btn").disabled = false;
   }
+}
+
+/* Honest running-phase text — delegates to phaseLabel() in app.js so the
+   download-vs-process logic stays in one shared, testable helper. */
+function renderPhase(m) {
+  const phase = $("status-phase");
+  phase.textContent = phaseLabel(activeSourceKind, m.phase, m.progress);
+  phase.classList.remove("hidden");
+}
+
+/* Error surface: show the human RU label for a known error_kind alongside the
+   raw message; degrade gracefully to the raw error when error_kind is absent
+   or unrecognised. */
+function renderError(m) {
+  const raw = m.error || "неизвестно";
+  const label = errorKindLabel(m.error_kind);
+  $("run-err").textContent = label
+    ? "Ошибка: " + label + " (" + raw + ")"
+    : "Ошибка: " + raw;
+  $("run-err").classList.remove("hidden");
 }
 
 // Deep-link: ?job=<id> resumes polling/viewing an existing job.

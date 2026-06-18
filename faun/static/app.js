@@ -165,3 +165,128 @@ function currentLabel(det) {
   if (!Array.isArray(labels) || labels.length === 0) return null;
   return labels[labels.length - 1];
 }
+
+/* ---------- Source-type UX (upload window) ---------- */
+
+/* Hosts that mark a value as a Yandex.Disk public/share link. */
+const YADISK_HOSTS = ["disk.yandex.ru", "yadi.sk"];
+
+/* Classify a raw source value into one of "folder" | "url" | "yadisk".
+
+   - A local filesystem path (leading "/", "./"/"../", "~", or a Windows
+     drive like "C:\\") is a "folder".
+   - An http(s) URL whose host is a Yandex.Disk host is "yadisk".
+   - Any other http(s) URL is "url".
+   Empty / unrecognised input defaults to "folder" (the common trap-folder
+   case) so the hint never misleads before the operator finishes typing. */
+function sourceKind(value) {
+  const v = (value || "").trim();
+  if (!v) return "folder";
+  // Local path forms.
+  if (
+    v.startsWith("/") ||
+    v.startsWith("./") ||
+    v.startsWith("../") ||
+    v.startsWith("~") ||
+    /^[a-zA-Z]:[\\/]/.test(v)
+  ) {
+    return "folder";
+  }
+  // Remote URL forms.
+  if (/^https?:\/\//i.test(v)) {
+    let host = "";
+    try {
+      host = new URL(v).hostname.toLowerCase();
+    } catch (_e) {
+      // Malformed URL — best-effort host sniff, else treat as a plain URL.
+      const m = v.match(/^https?:\/\/([^/]+)/i);
+      host = m ? m[1].toLowerCase() : "";
+    }
+    if (YADISK_HOSTS.some((h) => host === h || host.endsWith("." + h))) {
+      return "yadisk";
+    }
+    return "url";
+  }
+  // No scheme, no path marker — assume a folder name.
+  return "folder";
+}
+
+/* RU hint label for a source kind (shown beside the input). */
+const SOURCE_KIND_HINTS = {
+  folder: "папка",
+  url: "URL",
+  yadisk: "Яндекс.Диск",
+};
+
+function sourceKindHint(value) {
+  return SOURCE_KIND_HINTS[sourceKind(value)] || SOURCE_KIND_HINTS.folder;
+}
+
+/* A short RU note describing what will happen with each source kind, shown
+   beside the chip in the upload window's #source-hint element. */
+const SOURCE_KIND_NOTES = {
+  folder: "локальная папка ловушки",
+  url: "запись будет скачана по ссылке",
+  yadisk: "публичная ссылка Яндекс.Диска",
+};
+
+/* Render the live source-type hint for the upload window. Reads the current
+   value of the #source input and updates the #source-hint chip + note. No-op
+   when the elements are absent (so app.js stays shared across windows). */
+function renderSourceHint() {
+  const input = $("source");
+  const chip = $("source-hint-chip");
+  const note = $("source-hint-note");
+  if (!input || !chip || !note) return;
+  const value = input.value;
+  const kind = sourceKind(value);
+  chip.textContent = sourceKindHint(value);
+  note.textContent = SOURCE_KIND_NOTES[kind] || SOURCE_KIND_NOTES.folder;
+}
+
+/* True when a source kind is fetched over the network before processing —
+   used to honestly split "downloading source" from "processing". */
+function isRemoteSource(value) {
+  const k = sourceKind(value);
+  return k === "url" || k === "yadisk";
+}
+
+/* Honest running-phase label. A remote source is *downloaded* before it can be
+   *processed*. The backend may set ``phase`` ("download"|"process") on the job
+   explicitly; otherwise we infer — a remote job that has not yet moved its
+   progress bar is most likely still downloading. We never fabricate a precise
+   percentage here. ``kind`` is one of "folder"|"url"|"yadisk".
+
+   Returns "Скачивание источника…" or "Обработка…". */
+function phaseLabel(kind, phase, progress) {
+  if (phase === "download") return "Скачивание источника…";
+  if (phase === "process") return "Обработка…";
+  const remote = kind === "url" || kind === "yadisk";
+  if (remote && (typeof progress !== "number" || progress <= 0)) {
+    return "Скачивание источника…";
+  }
+  return "Обработка…";
+}
+
+/* ---------- error_kind -> human RU label ---------- */
+
+/* The backend sets job.error_kind (a short machine code) when a job fails for
+   a classifiable reason; the operator sees a human RU explanation. Keep these
+   honest and specific. Unknown / absent kinds fall back to the raw error. */
+const ERROR_KIND_LABELS = {
+  ssrf: "источник заблокирован (небезопасный адрес)",
+  "too-large": "архив слишком большой",
+  "not-found": "источник не найден",
+  "zip-slip": "небезопасный архив (пути выходят за пределы папки)",
+  "not-an-archive": "это не архив с записями",
+  "bad-scheme": "неподдерживаемый адрес источника",
+  network: "ошибка сети при загрузке источника",
+  empty: "в источнике нет записей",
+};
+
+/* Map an error_kind code to its RU label, or null if unknown/absent so the
+   caller can fall back to the raw error message (graceful degradation). */
+function errorKindLabel(kind) {
+  if (typeof kind !== "string" || !kind) return null;
+  return ERROR_KIND_LABELS[kind] || null;
+}
