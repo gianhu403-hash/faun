@@ -1,0 +1,34 @@
+# Faun v2 API — один сервис, порт 8010 (НЕ 8003/8005/9000 — заняты демо v1).
+#
+# Сборка/запуск стейдж: локально docker не гоняется. На целевом хосте —
+# `docker compose -f deploy/docker-compose.yml up -d --build` вручную.
+version: "3.8"
+
+services:
+  faun-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: faun-api:2.0.0-rc
+    container_name: faun-api
+    restart: unless-stopped
+    ports:
+      # host:container — 8010 выбран, чтобы не конфликтовать с v1-демо.
+      - "8010:8010"
+    environment:
+      # Каталог job-ов внутри контейнера = точка монтирования volume.
+      FAUN_JOBS_ROOT: /data/jobs
+      # Классификатор по умолчанию — Stub (образ TF-free).
+      FAUN_CLASSIFIER: stub
+    volumes:
+      # Персистентные результаты job-ов переживают пересоздание контейнера.
+      - faun-jobs:/data/jobs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8010/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  faun-jobs:
