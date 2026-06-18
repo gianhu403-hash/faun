@@ -4,9 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Faun — карта ловушек</title>
-  <!-- Leaflet via unpkg CDN (prototype; offline-bundled tiles are a separate task). -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <!-- Leaflet вшит локально (offline-first, без внешнего CDN — не висит за прокси). -->
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -47,8 +46,7 @@
   </div>
 </main>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/app.js"></script>
 <script>
 renderNav("dashboard");
@@ -59,9 +57,11 @@ let map = null;
 function initMap() {
   // Default view centred on European Russia until bounds are known.
   map = L.map("map").setView([58.0, 45.0], 5);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  // Тайлы CARTO (разрешены в CSP img-src). Внешние тайлы грузятся асинхронно:
+  // если прокси их режет — карта серая, но страница НЕ виснет (Leaflet локальный).
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: "© OpenStreetMap",
+    attribution: "© OpenStreetMap, © CARTO",
   }).addTo(map);
 }
 
