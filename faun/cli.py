@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     blabel.add_argument(
         "--embedder",
         default="perch",
-        choices=["perch", "yamnet"],
+        choices=["perch", "perch-v2", "yamnet"],
         help="embedder for --emb-out (default: perch)",
     )
     blabel.add_argument(
@@ -73,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     evalsp.add_argument("--probe", required=True, help="pickled probe (.pkl)")
     evalsp.add_argument("--dataset", required=True, help="iNatSounds dataset root")
-    evalsp.add_argument("--embedder", default="perch", choices=["perch", "yamnet"])
+    evalsp.add_argument(
+        "--embedder", default="perch", choices=["perch", "perch-v2", "yamnet"]
+    )
     evalsp.add_argument("--seed", type=int, default=42)
     evalsp.add_argument(
         "--real",
@@ -82,6 +84,33 @@ def main(argv: list[str] | None = None) -> int:
         "default keeps the honest SYNTHETIC tag",
     )
 
+    finetune = sub.add_parser(
+        "finetune",
+        help="REAL transformer fine-tune on iNatSounds (cluster GPU; faun.training)",
+    )
+    finetune.add_argument(
+        "--dataset", required=True, help="iNatSounds root (root/<species>/<clip>)"
+    )
+    finetune.add_argument("--model", default="passt", choices=["passt", "ast", "beats"])
+    finetune.add_argument(
+        "--out", required=True, help="output checkpoint dir (meta.json + weights.pt)"
+    )
+    finetune.add_argument("--epochs", type=int, default=15)
+    finetune.add_argument("--batch-size", type=int, default=16)
+    finetune.add_argument("--lr", type=float, default=3e-4)
+    finetune.add_argument("--device", default="auto")
+    finetune.add_argument("--amp", action="store_true", default=True)
+    finetune.add_argument("--no-amp", dest="amp", action="store_false")
+    finetune.add_argument("--grad-accum", type=int, default=2)
+    finetune.add_argument("--freeze-epochs", type=int, default=3)
+    finetune.add_argument("--patience", type=int, default=4)
+    finetune.add_argument("--class-weight", action="store_true", default=True)
+    finetune.add_argument(
+        "--no-class-weight", dest="class_weight", action="store_false"
+    )
+    finetune.add_argument("--seed", type=int, default=42)
+    finetune.add_argument("--resume", default=None, help="resume from checkpoint dir")
+
     args = parser.parse_args(argv)
 
     if args.command == "process":
@@ -89,10 +118,27 @@ def main(argv: list[str] | None = None) -> int:
         # CLI stays cheap to import.
         from faun.api import run_pipeline
 
-        src = Path(args.dir)
-        out = Path(args.out) if args.out else src / "results.csv"
-        job_dir = out.parent
-        results = run_pipeline(job_dir, str(src))
+        # The source may be a local dir OR a URL / Yandex.Disk share (resolved
+        # inside run_pipeline). A URL has no local parent for the default --out,
+        # so fall back to cwd; pass the RAW arg so the // in a URL survives.
+        src_arg = args.dir
+        is_url = src_arg.lower().startswith(("http://", "https://"))
+        if args.out:
+            out = Path(args.out)
+            job_dir = out.parent
+        elif is_url:
+            # A URL source has no local parent dir; isolate the job in a fresh
+            # per-run dir (mirrors the API's jobs_root/<id>/) so results.csv +
+            # segments/ + the extracted _source/ don't scatter across the
+            # operator's cwd or collide between runs.
+            import tempfile
+
+            job_dir = Path(tempfile.mkdtemp(prefix="faun-job-"))
+            out = job_dir / "results.csv"
+        else:
+            out = Path(src_arg) / "results.csv"
+            job_dir = out.parent
+        results = run_pipeline(job_dir, src_arg)
         # Honour an explicit --out path if run_pipeline wrote elsewhere.
         results = Path(results)
         if args.out and results != out:
@@ -138,6 +184,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "eval-species":
         return _eval_species(args)
+
+    if args.command == "finetune":
+        return _finetune(args)
 
     return 1
 
@@ -218,6 +267,10 @@ def _build_classifier_by_name(name: str):
         from faun.classification import PerchAdapter
 
         return PerchAdapter()
+    if name == "perch-v2":
+        from faun.classification import Perch2Adapter
+
+        return Perch2Adapter()
     if name == "birdnet":
         from faun.classification import BirdNETAdapter
 
@@ -231,8 +284,10 @@ def _build_classifier_by_name(name: str):
 
 def _build_embedder(name: str):
     """Map an embedder name to an Embedder adapter (heavy ML deps imported lazily)."""
-    from faun.embeddings import PerchEmbedder, YamnetEmbedder
+    from faun.embeddings import Perch2Embedder, PerchEmbedder, YamnetEmbedder
 
+    if name == "perch-v2":
+        return Perch2Embedder()
     return PerchEmbedder() if name == "perch" else YamnetEmbedder()
 
 
@@ -248,7 +303,7 @@ def _batch_label(args) -> int:
     models = {name: _build_classifier_by_name(name) for name in names}
     embedder = _build_embedder(args.embedder) if args.emb_out else None
     summary = labeling.batch_label(
-        Path(args.archive),
+        args.archive,  # raw str: local dir | http(s) zip | Yandex.Disk share
         models,
         Path(args.out),
         emb_out=Path(args.emb_out) if args.emb_out else None,
@@ -311,6 +366,35 @@ def _eval_species(args) -> int:
     # provenance tag — a toy/mini tree must never be reported as a species metric.
     metrics = retraining.species_eval(clf, X, y, synthetic=not args.real)
     print(metrics)
+    return 0
+
+
+def _finetune(args) -> int:
+    """Run the REAL transformer fine-tune on iNatSounds (faun.training).
+
+    Heavy deps (torch, hear21passt) are imported lazily inside ``finetune()``; the
+    CLI import stays cheap. Real species numbers only exist after the cluster run
+    (``scripts/finetune_inatsounds.sh``) — a local/synthetic run is not a metric.
+    """
+    from faun.training import finetune
+
+    summary = finetune(
+        args.dataset,
+        model=args.model,
+        out=args.out,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        device=args.device,
+        amp=args.amp,
+        grad_accum=args.grad_accum,
+        freeze_epochs=args.freeze_epochs,
+        patience=args.patience,
+        class_weight=args.class_weight,
+        seed=args.seed,
+        resume=args.resume,
+    )
+    print(summary)
     return 0
 
 

@@ -1,0 +1,29 @@
+# =============================================================================
+# requirements-train.txt — ТОЛЬКО для РЕАЛЬНОГО fine-tune аудио-трансформера
+# (faun.training) на cluster-alex, образ faun-ml-torch (GPU). НЕ ставится в CI и
+# НЕ нужен для control-flow тестов (они гоняются на numpy-стабе, torch-free).
+#
+# Базовый pipeline-стек — requirements-pipeline.txt (тяжёлый ML там lazy). Этот
+# файл аддитивен: ставится поверх, только на машине, где реально гоняем дообуч.
+#
+# Установка (на кластере):
+#   pip install -r requirements-pipeline.txt -r requirements-train.txt
+# =============================================================================
+
+# --- PyTorch стек (CPU локально 2.5.1; на кластере — CUDA-сборка под GPU) -----
+torch>=2.2,<2.7
+torchaudio>=2.2,<2.7
+
+# --- PaSST (продуктовый дефолт-бэкбон): код Apache-2.0; нативно 32 кГц ---------
+#   from hear21passt.base import get_basic_model, get_model_passt
+hear21passt>=0.0.26
+timm>=0.9            # PaSST зависит от timm (patch-embed / vit-утилиты)
+
+# --- Альтернативные бэкбоны (подключаемые; см. docs/finetuning.md) ------------
+#   AST  — HF transformers (MIT/ast-finetuned-audioset-10-10-0.4593), код BSD-3
+#   BEATs — код MIT, веса под кастомной MS-лицензией (проверять перед коммерцией)
+transformers>=4.40   # AST backbone (опционально)
+
+# --- Утилиты обучения ----------------------------------------------------------
+#   class-weight/метрики переиспользуют scikit-learn из requirements-pipeline.txt
+#   (StratifiedKFold/balanced — уже в базовом стеке).

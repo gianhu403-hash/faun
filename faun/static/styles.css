@@ -195,6 +195,21 @@ input:focus, select:focus {
 .row { display: flex; gap: 14px; }
 .row > div { flex: 1; min-width: 0; }
 
+/* Live source-type hint beneath the source input. */
+.source-hint {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 8px;
+}
+.source-hint .chip {
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border: 1px solid #c2e3cd;
+}
+.source-hint__note { color: var(--muted); font-size: 13px; }
+
 button {
   margin-top: 18px;
   padding: 11px 20px;
@@ -279,6 +294,8 @@ progress::-webkit-progress-value {
 }
 progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
 .queue { color: var(--muted); font-size: 13px; margin-top: 10px; }
+/* Running-phase line: honest "downloading source" vs "processing". */
+.status-phase { color: var(--fg-soft); font-size: 13.5px; margin-top: 12px; }
 
 /* ---------- Tables ---------- */
 .table-wrap { overflow-x: auto; margin-top: 16px; }

@@ -16,6 +16,7 @@ import pytest
 
 from faun.embeddings import (
     EmbeddingCache,
+    Perch2Embedder,
     PerchEmbedder,
     YamnetEmbedder,
     embed_batch,
@@ -180,6 +181,41 @@ class TestPerchEmbedderPreprocessing:
 
     def test_dim_property(self):
         assert PerchEmbedder.DIM == 1280
+
+
+# ---------------------------------------------------------------------------
+# Perch2Embedder — препроцессинг через монкипатч (TF-free); DIM=1536
+# ---------------------------------------------------------------------------
+
+
+class TestPerch2EmbedderPreprocessing:
+    def test_resamples_and_pads_to_window_shape_1536(self, monkeypatch):
+        import experiments.wrappers.perch_v2 as perch_v2
+
+        seen = {}
+
+        def fake_embed(windows_32k, batch_size=8):
+            w = np.asarray(windows_32k)
+            seen["shape"] = w.shape
+            seen["dtype"] = w.dtype
+            # Контракт experiments.wrappers.perch_v2.embed: вход [N, 160000] @32k.
+            assert w.ndim == 2, f"expected 2-D, got {w.shape}"
+            assert w.shape[1] == perch_v2.WIN_SAMPLES, w.shape
+            return np.ones((w.shape[0], perch_v2.DIM), dtype=np.float32), None
+
+        monkeypatch.setattr(perch_v2, "embed", fake_embed)
+
+        # 48k stereo -> downmix -> ресемпл 32k -> pad/truncate до 160000.
+        stereo = np.zeros((48000, 2), dtype=np.float32)
+        out = Perch2Embedder().embed(stereo, 48000)
+
+        assert seen["shape"] == (1, perch_v2.WIN_SAMPLES)
+        assert out.shape == (1536,)
+        assert out.dtype == np.float32
+
+    def test_dim_property_is_1536_not_1280(self):
+        assert Perch2Embedder.DIM == 1536
+        assert Perch2Embedder.DIM != PerchEmbedder.DIM  # distinct embedding spaces
 
 
 # ---------------------------------------------------------------------------

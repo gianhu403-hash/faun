@@ -1,0 +1,229 @@
+"""Centralized, typed configuration for Faun — one home for all FAUN_* knobs.
+
+Before this module, ``FAUN_*`` (and the model-path) environment variables were
+read ad-hoc and inconsistently: ``faun.api`` resolved ``FAUN_JOBS_ROOT`` /
+``FAUN_CLASSIFIER`` inline, ``faun.health`` re-implemented the same jobs-root
+resolution, and each adapter (``PERCH_MODEL_PATH``, ``YAMNET_PROBE_PATH``) read
+its own ``os.environ`` call. The forthcoming source-resolution layer
+(``faun.sources`` — see ``docs/adr/0001-source-resolution-layer.md``) adds a set
+of SSRF / zip-bomb hardening limits that also need a single, defensible home.
+
+``Settings`` is a frozen dataclass parsed once from the environment via
+``from_env``. ``get_settings`` returns a cached singleton; it is intentionally
+invalidatable (``get_settings.cache_clear()``) so tests can monkeypatch the
+environment per-test and pick up the change.
+
+Defensive parsing is a deliberate enterprise choice: a malformed or
+non-positive numeric env var must NOT crash service boot. Such values fall back
+to the documented default and the misconfiguration is surfaced via a log
+warning rather than a traceback.
+
+NOTE on wiring status (read before trusting a value here): this module is the
+typed *home* for these knobs, but it is not yet the only *reader*. As of this
+iteration ``faun.sources`` still reads the ``FAUN_SOURCE_*`` vars directly (with
+the SAME defaults mirrored below — they are the enforced ceilings), and the
+model adapters still read ``PERCH_V2_MODEL_PATH`` / ``PERCH_MODEL_PATH`` /
+``YAMNET_PROBE_PATH`` directly. The corresponding ``Settings`` fields mirror
+those env vars and are the migration target; changing a ``Settings`` field in
+code does NOT yet change adapter/sources behaviour until that wiring lands.
+``jobs_root``, ``classifier`` and ``log_json`` ARE consumed via ``get_settings``
+(faun.api).
+
+Defaults (match the values faun.sources actually enforces):
+    jobs_root                 ``./jobs``      (FAUN_JOBS_ROOT)         [WIRED]
+    classifier                ``stub``        (FAUN_CLASSIFIER)        [WIRED]
+    timeout_s                 ``60.0`` s      (FAUN_SOURCE_TIMEOUT_S)
+    max_bytes                 ``30 GiB``      (FAUN_SOURCE_MAX_BYTES) — download cap
+    max_uncompressed_bytes    ``60 GiB``      (FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES) — zip-bomb cap
+    max_entries               ``100000``      (FAUN_SOURCE_MAX_ENTRIES) — archive member cap
+    max_redirects             ``5``           (FAUN_SOURCE_MAX_REDIRECTS) — SSRF redirect cap
+    log_json                  ``True``        (FAUN_LOG_JSON)          [WIRED]
+    perch_v2_model_path       ``None``        (PERCH_V2_MODEL_PATH)
+    perch_model_path          ``None``        (PERCH_MODEL_PATH)
+    yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Documented defaults (single source of truth — referenced from from_env)
+# ---------------------------------------------------------------------------
+
+DEFAULT_JOBS_ROOT = "./jobs"
+DEFAULT_CLASSIFIER = "stub"
+# Source-resolution hardening limits. These MIRROR the authoritative defaults in
+# faun.sources (the enforcing reader, which still reads FAUN_SOURCE_* directly).
+# They are sized for the real Yandex.Disk trap folders (~23 GB extracted per A1
+# folder, ~115 MB per WAV), NOT a conservative generic default — a 2 GiB cap
+# would reject a legitimate trap-folder pull. Keep these two in sync until
+# faun.sources is migrated to read Settings (see module docstring NOTE).
+DEFAULT_TIMEOUT_S = 60.0
+DEFAULT_MAX_BYTES = 30 * 1024**3  # 30 GiB on-the-wire download cap
+DEFAULT_MAX_UNCOMPRESSED_BYTES = 60 * 1024**3  # 60 GiB extracted (zip-bomb) cap
+DEFAULT_MAX_ENTRIES = 100_000  # archive member cap
+DEFAULT_MAX_REDIRECTS = 5  # SSRF redirect cap
+DEFAULT_LOG_JSON = True
+
+#: Values accepted as boolean true / false for FAUN_LOG_JSON. Anything else
+#: (including the empty string) falls back to the field default.
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+# ---------------------------------------------------------------------------
+# Defensive primitive parsers
+# ---------------------------------------------------------------------------
+
+
+def _env_int(name: str, default: int, *, positive: bool = True) -> int:
+    """Parse an int env var; fall back to ``default`` on absence/garbage.
+
+    Args:
+        name: Environment variable name.
+        default: Value used when unset, empty, non-integer or (when
+            ``positive``) non-positive.
+        positive: When True, a parsed value <= 0 is rejected as nonsensical for
+            a size/count limit and replaced by ``default``.
+
+    Returns:
+        The parsed integer, or ``default``.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning("invalid int for %s=%r; using default %d", name, raw, default)
+        return default
+    if positive and value <= 0:
+        logger.warning("non-positive %s=%d; using default %d", name, value, default)
+        return default
+    return value
+
+
+def _env_float(name: str, default: float, *, positive: bool = True) -> float:
+    """Parse a float env var; fall back to ``default`` on absence/garbage.
+
+    See :func:`_env_int`; the same defensive semantics apply for floats (e.g.
+    a network timeout in seconds).
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        logger.warning("invalid float for %s=%r; using default %s", name, raw, default)
+        return default
+    if positive and value <= 0:
+        logger.warning("non-positive %s=%s; using default %s", name, value, default)
+        return default
+    return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var; fall back to ``default`` on absence/unknown."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    token = raw.strip().lower()
+    if token in _TRUE:
+        return True
+    if token in _FALSE:
+        return False
+    return default
+
+
+def _env_path_opt(name: str) -> str | None:
+    """Return a stripped non-empty env string, else None (blank == unset)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Immutable, typed snapshot of every Faun configuration knob.
+
+    Construct via :meth:`from_env`; access the shared instance via
+    :func:`get_settings`. The dataclass is frozen so configuration cannot be
+    mutated after parse — callers that need a different config in a test clear
+    the :func:`get_settings` cache and re-read the environment.
+    """
+
+    # Core service knobs (match today's faun.api / faun.health behaviour).
+    jobs_root: Path = Path(DEFAULT_JOBS_ROOT)
+    classifier: str = DEFAULT_CLASSIFIER
+
+    # Source-resolution hardening limits (SSRF / zip-bomb; see ADR-0001).
+    timeout_s: float = DEFAULT_TIMEOUT_S
+    max_bytes: int = DEFAULT_MAX_BYTES
+    max_uncompressed_bytes: int = DEFAULT_MAX_UNCOMPRESSED_BYTES
+    max_entries: int = DEFAULT_MAX_ENTRIES
+    max_redirects: int = DEFAULT_MAX_REDIRECTS
+
+    # Model source resolution (centralizes the adapters' own env reads).
+    perch_v2_model_path: str | None = None
+    perch_model_path: str | None = None
+    yamnet_probe_path: str | None = None
+
+    # Observability.
+    log_json: bool = DEFAULT_LOG_JSON
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        """Build Settings from ``os.environ`` with safe typed defaults.
+
+        Every numeric var is parsed defensively (malformed or non-positive
+        values fall back to the documented default and emit a warning), so a
+        single typo in deployment env never crashes service boot. ``classifier``
+        is normalized (trimmed + lower-cased) to match the existing
+        ``faun.api._build_classifier`` contract.
+
+        Returns:
+            A fully-populated, frozen :class:`Settings`.
+        """
+        return cls(
+            jobs_root=Path(os.environ.get("FAUN_JOBS_ROOT", DEFAULT_JOBS_ROOT)),
+            classifier=(
+                os.environ.get("FAUN_CLASSIFIER", DEFAULT_CLASSIFIER).strip().lower()
+                or DEFAULT_CLASSIFIER
+            ),
+            timeout_s=_env_float("FAUN_SOURCE_TIMEOUT_S", DEFAULT_TIMEOUT_S),
+            max_bytes=_env_int("FAUN_SOURCE_MAX_BYTES", DEFAULT_MAX_BYTES),
+            max_uncompressed_bytes=_env_int(
+                "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", DEFAULT_MAX_UNCOMPRESSED_BYTES
+            ),
+            max_entries=_env_int("FAUN_SOURCE_MAX_ENTRIES", DEFAULT_MAX_ENTRIES),
+            max_redirects=_env_int("FAUN_SOURCE_MAX_REDIRECTS", DEFAULT_MAX_REDIRECTS),
+            perch_v2_model_path=_env_path_opt("PERCH_V2_MODEL_PATH"),
+            perch_model_path=_env_path_opt("PERCH_MODEL_PATH"),
+            yamnet_probe_path=_env_path_opt("YAMNET_PROBE_PATH"),
+            log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
+        )
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the cached, process-wide :class:`Settings` singleton.
+
+    Cached via ``lru_cache``; call ``get_settings.cache_clear()`` to invalidate
+    (tests rely on this to pick up per-test environment overrides).
+    """
+    return Settings.from_env()

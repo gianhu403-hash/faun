@@ -341,3 +341,130 @@ def test_concurrent_label_no_lost_update(client, tmp_path):
         "lost-update: both concurrent labels must be present"
     )
     assert len(target.labels) == base_labels + 2
+
+
+# ---------------------------------------------------------------------------
+# Wave-2 P0 e2e: a URL / Yandex.Disk source resolved through the REAL pipeline
+# (run_pipeline is NOT patched here; httpx + DNS are mocked, no network).
+# ---------------------------------------------------------------------------
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
+
+def _zip_tree_bytes(root: Path) -> bytes:
+    """Zip a directory tree to in-memory bytes (arcnames relative to root)."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                zf.write(p, p.relative_to(root).as_posix())
+    return buf.getvalue()
+
+
+class _FakeStream:
+    """httpx streaming-response stand-in for the download leg."""
+
+    def __init__(self, url: str, payload: bytes) -> None:
+        self.url = url
+        self.status_code = 200
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_bytes(self, chunk_size: int = 65536):
+        for i in range(0, len(self._payload), chunk_size):
+            yield self._payload[i : i + chunk_size]
+
+
+class _FakeResp:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+class _FakeYandexClient:
+    """Minimal httpx.Client stand-in: resolve href -> stream a ZIP. No network."""
+
+    def __init__(self, zip_bytes: bytes, **_kw) -> None:
+        self._zip = zip_bytes
+
+    def get(self, url, params=None):
+        # /resources/download -> a download href on an allowlisted Yandex host.
+        return _FakeResp({"href": "https://downloader.disk.yandex.ru/disk/zip?x=1"})
+
+    def stream(self, method, href):
+        return _FakeStream("https://s1.storage.yandex.net/rdisk/A1.zip", self._zip)
+
+    def close(self):
+        return None
+
+
+def _patch_public_dns(monkeypatch):
+    """Make every host resolve to a public IP so the SSRF guard passes offline."""
+    import faun.sources as sources
+
+    def fake_getaddrinfo(host, *a, **k):
+        return [(2, 1, 6, "", ("93.184.216.34", 0))]  # AF_INET, public IP
+
+    monkeypatch.setattr(sources.socket, "getaddrinfo", fake_getaddrinfo)
+
+
+def test_p0_yandex_url_resolved_through_pipeline(client, tmp_path, monkeypatch):
+    """P0: a Yandex.Disk URL is downloaded+extracted and ingested for real.
+
+    Before the fix run_pipeline did Path("https://...") -> ingest FileNotFound.
+    Now resolve_source fetches a ZIP (mocked httpx) -> A1/A2 -> results.csv, and
+    ingest.scan never sees an "https:/"-mangled path.
+    """
+    import json
+
+    import faun.sources as sources
+
+    zip_bytes = _zip_tree_bytes(_FIXTURES / "traps_mini")
+    _patch_public_dns(monkeypatch)
+    monkeypatch.setattr(
+        sources.httpx, "Client", lambda **kw: _FakeYandexClient(zip_bytes, **kw)
+    )
+
+    resp = client.post("/jobs", json={"url": "https://disk.yandex.ru/d/TESTKEY"})
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+
+    body = client.get(f"/jobs/{job_id}").json()
+    assert body["status"] == "done", body  # resolve+ingest+classify+write all ran
+    csv = client.get(f"/jobs/{job_id}/results.csv")
+    assert csv.status_code == 200
+
+    meta = json.loads(
+        (tmp_path / "jobs" / job_id / "results_meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["source_provenance"]["mode"] == "yadisk"
+    assert meta["source_provenance"]["source"] == "https://disk.yandex.ru/d/TESTKEY"
+    # ingest saw BOTH traps (A1 + A2) from the extracted archive.
+    assert len(meta["files"]) == 2
+
+
+def test_p0_resolve_failure_marks_job_error_not_500(client):
+    """An SSRF/internal source -> job status='error' with error_kind, never 500."""
+    resp = client.post("/jobs", json={"url": "http://127.0.0.1/evil.zip"})
+    assert resp.status_code == 200
+    job_id = resp.json()["job_id"]
+    body = client.get(f"/jobs/{job_id}").json()
+    assert body["status"] == "error"
+    assert body.get("error_kind") == "ssrf"
+    assert "error" in body

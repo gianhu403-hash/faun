@@ -16,6 +16,27 @@ from faun.ml.yamnet import AudioResult, AudioClass  # noqa: F401  (re-export for
 
 
 # ---------------------------------------------------------------------------
+# Settings cache hygiene
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    """Clear the faun.settings cache around every test.
+
+    ``get_settings()`` is ``lru_cache``-d, but many tests monkeypatch env vars
+    (FAUN_JOBS_ROOT, FAUN_CLASSIFIER, FAUN_SOURCE_*) per-test and expect them to
+    take effect. Clearing the cache before and after each test preserves that
+    call-time-override contract while production keeps the cached singleton.
+    """
+    from faun.settings import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
 # Audio helpers
 # ---------------------------------------------------------------------------
 
@@ -77,4 +98,9 @@ def pytest_configure(config) -> None:
     config.addinivalue_line(
         "markers",
         "requires_tf: needs TensorFlow + tensorflow_hub (cluster only; skips in CI)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_torch: needs PyTorch (real fwd/bwd; skips where torch is absent, "
+        "e.g. CI). Orchestration paths are covered TF/torch-free via a numpy stub.",
     )

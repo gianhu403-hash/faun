@@ -20,6 +20,7 @@ __all__ = [
     "BirdNETAdapter",
     "YAMNetAdapter",
     "PerchAdapter",
+    "Perch2Adapter",
 ]
 
 # Lazy adapter re-exports (PEP 562). Concrete adapters live in sibling modules
@@ -29,6 +30,7 @@ _LAZY_ADAPTERS = {
     "BirdNETAdapter": "birdnet",
     "YAMNetAdapter": "yamnet",
     "PerchAdapter": "perch",
+    "Perch2Adapter": "perch_v2",
 }
 
 

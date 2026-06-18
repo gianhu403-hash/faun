@@ -36,6 +36,7 @@ except ImportError:  # pragma: no cover - soxr в requirements-pipeline.txt
 __all__ = [
     "Embedder",
     "PerchEmbedder",
+    "Perch2Embedder",
     "YamnetEmbedder",
     "embed_batch",
     "EmbeddingCache",
@@ -123,6 +124,26 @@ class PerchEmbedder:
         resampled = _resample(mono, sr, perch.SR)
         window = _fit_window(resampled, perch.WIN_SAMPLES)
         embeddings, _logits = perch.embed(window[np.newaxis, :])
+        return np.asarray(embeddings[0], dtype=np.float32)
+
+
+class Perch2Embedder:
+    """Эмбеддер Perch 2: downmix -> 32 кГц -> окно 160000 -> вектор [1536].
+
+    Тяжёлый TF тянется лениво внутри ``experiments.wrappers.perch_v2.embed``,
+    так что реально работает только на кластере. Препроцессинг — здесь.
+    Размерность 1536 (Apache-2.0 Perch 2), НЕ 1280 как у Perch 1.
+    """
+
+    DIM = 1536
+
+    def embed(self, waveform: np.ndarray, sr: int) -> np.ndarray:
+        import experiments.wrappers.perch_v2 as perch_v2
+
+        mono = _downmix(waveform)
+        resampled = _resample(mono, sr, perch_v2.SR)
+        window = _fit_window(resampled, perch_v2.WIN_SAMPLES)
+        embeddings, _logits = perch_v2.embed(window[np.newaxis, :])
         return np.asarray(embeddings[0], dtype=np.float32)
 
 

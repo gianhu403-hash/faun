@@ -28,6 +28,7 @@ from faun.segmentation import Segment
 
 __all__ = [
     "SOURCE_PERCH",
+    "SOURCE_PERCH_V2",
     "SOURCE_BIRDNET",
     "SOURCE_YAMNET_PROBE",
     "SOURCE_STUB",
@@ -45,6 +46,7 @@ __all__ = [
 
 # --- Label provenance (source) -------------------------------------------------
 SOURCE_PERCH = "model:perch"
+SOURCE_PERCH_V2 = "model:perch-v2"
 SOURCE_BIRDNET = "model:birdnet"
 SOURCE_YAMNET_PROBE = "model:yamnet-probe"
 SOURCE_STUB = "model:stub"
