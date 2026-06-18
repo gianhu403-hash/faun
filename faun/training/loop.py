@@ -120,6 +120,7 @@ class _TorchTrainer:  # pragma: no cover - реальный путь, тольк
         class_weights: Any | None,
         amp: bool,
         device: Any,
+        grad_accum: int = 1,
     ) -> None:
         import torch
 
@@ -128,8 +129,11 @@ class _TorchTrainer:  # pragma: no cover - реальный путь, тольк
         self.head = head
         self.optimizer = optimizer
         self.device = device
+        # Делитель loss для grad-accum: иначе суммарный градиент за окно accum
+        # завышен в grad_accum раз => эффективный LR дрейфует (#6).
+        self.grad_accum = max(1, int(grad_accum))
         self.amp = bool(amp) and getattr(device, "type", "cpu") == "cuda"
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp)
         weight = (
             torch.as_tensor(class_weights, dtype=torch.float32, device=device)
             if class_weights is not None
@@ -148,7 +152,9 @@ class _TorchTrainer:  # pragma: no cover - реальный путь, тольк
             feats = self.backbone.forward(waveforms)
             logits = self.head(feats)
             loss = self.criterion(logits, labels)
-        self.scaler.scale(loss).backward()
+        # Делим на grad_accum ДО backward: суммируемые градиенты дадут средний,
+        # а не grad_accum-кратный — реализуемый LR совпадёт с конфигом (#6).
+        self.scaler.scale(loss / self.grad_accum).backward()
         return float(loss.detach().cpu().item())
 
     def optimizer_step(self) -> None:
@@ -222,8 +228,13 @@ def finetune(
         )
 
     if vocab is None:
-        # Инжектированный режим без vocab: выводим n_classes из меток лоадера.
-        n_classes = (max(_iter_labels(train_loader)) + 1) if not stub_mode else 0
+        # Сюда попадаем только на инжектированном (стаб) пути: реальный путь
+        # резолвит vocab из датасета выше. Выводим n_classes ИЗ МЕТОК лоадера
+        # (раньше инвертированный guard `if not stub_mode` всегда давал 0; #8).
+        labels = _iter_labels(train_loader)
+        if not labels:
+            raise ValueError("vocab required when loaders injected without labels")
+        n_classes = max(labels) + 1
         vocab = {str(i): i for i in range(n_classes)}
     n_classes = len(vocab)
 
@@ -250,7 +261,7 @@ def finetune(
         provenance = _SYNTHETIC_PROVENANCE
     else:  # pragma: no cover - реальный путь (torch)
         trainer, head, optimizer, provenance = _build_torch_trainer(
-            backbone, feature_dim, n_classes, lr, amp, device, class_weights
+            backbone, feature_dim, n_classes, lr, amp, device, class_weights, grad_accum
         )
 
     # --- resume ------------------------------------------------------------
@@ -271,16 +282,25 @@ def finetune(
     epochs_run = 0
     early_stopped = False
     epochs_since_best = 0
+    # Счёт optimizer.step самим лупом — единый источник для обоих путей
+    # (реальный AdamW не имеет step_calls; getattr->-1 был бы тихим враньём).
+    optimizer_steps = 0
+    # Расписание разморозки драйвим по индексу эпохи, без оглядки на возможно-
+    # отсутствующий флаг frozen (на реальном бэкбоне его читали через getattr->
+    # False => unfreeze НИКОГДА не звался; см. finding #5). Один вызов на прогон,
+    # на первой эпохе с epoch >= freeze_epochs (robust к resume за границу).
+    unfrozen = False
 
     # --- эпоха-луп ---------------------------------------------------------
     for epoch in range(start_epoch, epochs):
-        # freeze/unfreeze расписание (наблюдаемо через флаг стаба).
-        if epoch < freeze_epochs:
-            if hasattr(backbone, "freeze") and not getattr(backbone, "frozen", True):
-                backbone.freeze()
-        else:
-            if hasattr(backbone, "unfreeze") and getattr(backbone, "frozen", False):
-                backbone.unfreeze()
+        if (
+            freeze_epochs > 0
+            and not unfrozen
+            and epoch >= freeze_epochs
+            and hasattr(backbone, "unfreeze")
+        ):
+            backbone.unfreeze()
+            unfrozen = True
 
         # train: микро-батчи + grad-accum.
         micro = 0
@@ -289,9 +309,11 @@ def finetune(
             micro += 1
             if micro % grad_accum == 0:
                 trainer.optimizer_step()
+                optimizer_steps += 1
         # хвостовой шаг для оставшихся микро-батчей (неполный аккум).
         if micro % grad_accum != 0:
             trainer.optimizer_step()
+            optimizer_steps += 1
 
         # val-loss: скрипт (тесты) либо реальная оценка (кластер).
         if scripted_val is not None:
@@ -331,7 +353,7 @@ def finetune(
         "best_val_loss": best_val_loss,
         "val_loss_history": val_loss_history,
         "early_stopped": early_stopped,
-        "optimizer_steps": int(getattr(optimizer, "step_calls", -1)),
+        "optimizer_steps": optimizer_steps,
         "class_weights": (
             class_weights.tolist() if class_weights is not None else None
         ),
@@ -350,6 +372,7 @@ def _build_torch_trainer(
     amp: bool,
     device: str,
     class_weights: np.ndarray | None,
+    grad_accum: int = 1,
 ):  # pragma: no cover - реальный путь, только под torch/кластер
     """Собрать torch-тренер: голова, param-group LR (голова > бэкбон), AMP."""
     import torch
@@ -369,7 +392,13 @@ def _build_torch_trainer(
         param_groups.append({"params": backbone_net.parameters(), "lr": lr / 10.0})
     optimizer = torch.optim.AdamW(param_groups)
     trainer = _TorchTrainer(
-        backbone, head, optimizer, class_weights=class_weights, amp=amp, device=dev
+        backbone,
+        head,
+        optimizer,
+        class_weights=class_weights,
+        amp=amp,
+        device=dev,
+        grad_accum=grad_accum,
     )
     return trainer, head, optimizer, _REAL_PROVENANCE
 

@@ -173,14 +173,18 @@ def _build_passt(*, sr: int, win_s: float, freeze: bool) -> Backbone:
 
         def __init__(self, net: Any) -> None:
             self.net = net
+            # Наблюдаемый флаг (контракт стаба): луп читает frozen на реальном пути.
+            self.frozen = False
 
         def freeze(self) -> None:
             for p in self.net.parameters():
                 p.requires_grad = False
+            self.frozen = True
 
         def unfreeze(self) -> None:
             for p in self.net.parameters():
                 p.requires_grad = True
+            self.frozen = False
 
         def forward(self, batch: Any) -> Any:
             return self.net(batch)
@@ -209,14 +213,18 @@ def _build_ast(*, freeze: bool) -> Backbone:  # pragma: no cover - требуе�
 
         def __init__(self, net: Any) -> None:
             self.net = net
+            # Наблюдаемый флаг (контракт стаба): луп читает frozen на реальном пути.
+            self.frozen = False
 
         def freeze(self) -> None:
             for p in self.net.parameters():
                 p.requires_grad = False
+            self.frozen = True
 
         def unfreeze(self) -> None:
             for p in self.net.parameters():
                 p.requires_grad = True
+            self.frozen = False
 
         def forward(self, batch: Any) -> Any:
             return self.net(batch).pooler_output

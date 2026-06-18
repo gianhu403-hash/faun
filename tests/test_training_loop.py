@@ -364,6 +364,206 @@ def test_resume_continues_from_saved_epoch(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_unfreeze_called_at_boundary_even_without_frozen_attr(tmp_path):
+    """STUB-COVERED (#5b): луп зовёт unfreeze ровно на epoch==freeze_epochs БЕЗ
+    оглядки на флаг frozen — robust к реальному бэкбону, у которого флага могло
+    бы не быть. Бэкбон-двойник стартует НЕ замороженным и без freeze()."""
+
+    class _NoFlagBackbone:
+        feature_dim = 8
+
+        def __init__(self) -> None:
+            self.unfreeze_calls = 0
+
+        def unfreeze(self) -> None:
+            self.unfreeze_calls += 1
+
+        def forward(self, batch):
+            arr = np.asarray(batch, dtype=np.float64)
+            if arr.ndim == 1:
+                arr = arr[np.newaxis, :]
+            return np.zeros((arr.shape[0], self.feature_dim), dtype=np.float32)
+
+    bb = _NoFlagBackbone()
+    script = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]
+    summary, bb, _out = _run(
+        tmp_path,
+        val_script=script,
+        epochs=6,
+        freeze_epochs=3,
+        patience=6,
+        backbone=bb,
+    )
+    assert summary["epochs_run"] == 6
+    # ровно один вызов на прогон, на границе epoch==3 (не каждую эпоху).
+    assert bb.unfreeze_calls == 1
+
+
+def test_real_backbones_expose_frozen_flag_contract():
+    """TORCH-FREE (#5a): реальные бэкбоны несут наблюдаемый ``frozen``, который
+    переключается freeze()/unfreeze() — тот же контракт, что у стаба, поэтому
+    расписание лупа корректно и на реальном пути. Сетку net мокаем, веса не тянем.
+    """
+    from faun.training import backbones as bbmod
+
+    class _FakeParam:
+        def __init__(self) -> None:
+            self.requires_grad = True
+
+    class _FakeNet:
+        def __init__(self) -> None:
+            self._params = [_FakeParam(), _FakeParam()]
+
+        def parameters(self):
+            return iter(self._params)
+
+    # Строим реальный _PasstBackbone через build, замокав тяжёлые import/веса:
+    # get_basic_model отдаёт numpy-двойник сети, torch нужен лишь для import.
+    import sys
+    import types
+
+    fake_hp = types.ModuleType("hear21passt")
+    fake_hp_base = types.ModuleType("hear21passt.base")
+    fake_hp_base.get_basic_model = lambda mode: _FakeNet()  # noqa: ARG005
+    fake_hp.base = fake_hp_base
+    fake_torch = sys.modules.get("torch") or types.ModuleType("torch")
+    saved = {
+        "hear21passt": sys.modules.get("hear21passt"),
+        "hear21passt.base": sys.modules.get("hear21passt.base"),
+        "torch": sys.modules.get("torch"),
+    }
+    sys.modules["hear21passt"] = fake_hp
+    sys.modules["hear21passt.base"] = fake_hp_base
+    sys.modules["torch"] = fake_torch
+    try:
+        bb = bbmod.build_backbone("passt", freeze=True)
+        assert bb.frozen is True  # build_backbone(freeze=True) заморозил
+        bb.unfreeze()
+        assert bb.frozen is False
+        assert all(p.requires_grad for p in bb.net.parameters())
+        bb.freeze()
+        assert bb.frozen is True
+        assert all(not p.requires_grad for p in bb.net.parameters())
+    finally:
+        for name, mod in saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+
+def test_vocab_none_on_injected_path_derives_n_classes(tmp_path):
+    """STUB-COVERED (#8): vocab=None на инжектированном пути выводит n_classes ИЗ
+    МЕТОК лоадера (раньше инвертированный guard форсил 0 => пустой vocab)."""
+    # метки 0,1,2 => n_classes должно стать 3.
+    labels = [0, 1, 2, 0, 1, 2, 0, 1]
+    bb = _StubBackbone(feature_dim=8, seed=1)
+    train = _FakeLoader(4, labels=labels, seed=1)
+    val = _FakeLoader(1, val_loss_script=[0.5, 0.6], seed=2)
+    out = tmp_path / "ckpt"
+    summary = finetune(
+        tmp_path,
+        vocab=None,
+        out=out,
+        epochs=2,
+        patience=1,
+        class_weight=True,
+        _backbone=bb,
+        _loaders=(train, val),
+    )
+    assert summary["n_classes"] == 3
+    # class_weight ветка ожила: веса посчитаны на 3 класса (а не пустой vocab).
+    assert summary["class_weights"] is not None
+    assert len(summary["class_weights"]) == 3
+
+
+def test_vocab_none_without_labels_raises(tmp_path):
+    """STUB-COVERED (#8): vocab=None и лоадер без меток => явный ValueError."""
+
+    class _EmptyLoader:
+        def __iter__(self):
+            return iter(())
+
+    bb = _StubBackbone(feature_dim=8, seed=1)
+    val = _FakeLoader(1, val_loss_script=[0.5], seed=2)
+    with pytest.raises(ValueError, match="vocab required"):
+        finetune(
+            tmp_path,
+            vocab=None,
+            out=tmp_path / "ck",
+            epochs=1,
+            _backbone=bb,
+            _loaders=(_EmptyLoader(), val),
+        )
+
+
+@pytest.mark.requires_torch
+def test_real_passt_backbone_freeze_flag_and_loop_unfreeze(tmp_path):
+    """TORCH-ONLY (#5): реальный _PasstBackbone (с замоканной net, веса PaSST не
+    тянем offline) несёт frozen, и луп зовёт unfreeze на границе. Если torch нет
+    — SKIP."""
+    pytest.importorskip("torch")
+    import torch
+
+    from faun.training import backbones as bbmod
+
+    class _NumpyOutLinear(torch.nn.Module):
+        """Реальный torch-модуль (живые params для requires_grad), но forward
+        отдаёт numpy — чтобы стаб-тренер мог скормить numpy-батч без torch-тензора.
+        """
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(8, 8)
+
+        def forward(self, batch):  # noqa: D401
+            arr = np.asarray(batch, dtype=np.float32)
+            if arr.ndim == 1:
+                arr = arr[np.newaxis, :]
+            return np.zeros((arr.shape[0], 8), dtype=np.float32)
+
+    net = _NumpyOutLinear()
+    import sys
+    import types
+
+    fake_hp = types.ModuleType("hear21passt")
+    fake_hp_base = types.ModuleType("hear21passt.base")
+    fake_hp_base.get_basic_model = lambda mode: net  # noqa: ARG005
+    fake_hp.base = fake_hp_base
+    saved_hp = sys.modules.get("hear21passt")
+    saved_hpb = sys.modules.get("hear21passt.base")
+    sys.modules["hear21passt"] = fake_hp
+    sys.modules["hear21passt.base"] = fake_hp_base
+    try:
+        bb = bbmod.build_backbone("passt", freeze=True)
+    finally:
+        for name, mod in (("hear21passt", saved_hp), ("hear21passt.base", saved_hpb)):
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    assert bb.frozen is True
+    assert all(not p.requires_grad for p in bb.net.parameters())
+
+    # Прогон лупа: на границе freeze_epochs=2 бэкбон должен разморозиться.
+    train = _FakeLoader(2, labels=[0, 0, 1, 0], seed=1)
+    val = _FakeLoader(1, val_loss_script=[0.9, 0.8, 0.7, 0.6], seed=2)
+    finetune(
+        tmp_path,
+        vocab={"a": 0, "b": 1},
+        out=tmp_path / "ck",
+        epochs=4,
+        freeze_epochs=2,
+        patience=4,
+        class_weight=False,
+        _backbone=bb,
+        _loaders=(train, val),
+    )
+    assert bb.frozen is False
+    assert all(p.requires_grad for p in bb.net.parameters())
+
+
 @pytest.mark.requires_torch
 def test_real_forward_backward_updates_param(tmp_path):
     """TORCH-ONLY: реальный forward + loss.backward() + optimizer.step меняет параметр.
