@@ -78,3 +78,8 @@ def pytest_configure(config) -> None:
         "markers",
         "requires_tf: needs TensorFlow + tensorflow_hub (cluster only; skips in CI)",
     )
+    config.addinivalue_line(
+        "markers",
+        "requires_torch: needs PyTorch (real fwd/bwd; skips where torch is absent, "
+        "e.g. CI). Orchestration paths are covered TF/torch-free via a numpy stub.",
+    )
