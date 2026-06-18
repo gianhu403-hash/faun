@@ -322,6 +322,14 @@ def review() -> HTMLResponse:
     return HTMLResponse(page.read_text(encoding="utf-8"))
 
 
+@app.get("/healthz")
+def healthz() -> dict:
+    """Лёгкий liveness/readiness без тяжёлых импортов (handler в faun.health)."""
+    from faun.health import health
+
+    return health()
+
+
 @app.post("/jobs")
 def create_job(req: JobRequest, background_tasks: BackgroundTasks) -> dict:
     job = jobs.create_job(

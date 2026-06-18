@@ -124,6 +124,16 @@ def test_index_served(client):
     assert "Faun" in resp.text
 
 
+def test_healthz_ok(client):
+    """/healthz is wired to faun.health.health() and returns a 200 readiness body."""
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "faun-api"
+    assert "version" in body
+
+
 # ---------------------------------------------------------------------------
 # Phase-3 frontend render backstop (gate 6): the three windows + shared assets
 # ---------------------------------------------------------------------------
