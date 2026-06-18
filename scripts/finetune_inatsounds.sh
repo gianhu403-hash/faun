@@ -31,21 +31,19 @@
 #       /home/oleg/faun-data/models/inat_finetune
 #   аргументы: <dataset_root> [backbone=passt|ast] [out_checkpoint_dir]
 #
-# ОЖИДАЕМЫЙ ВЫВОД (stdout, последние строки)
-#   dataset: N clips, K species
-#   finetune: backbone=passt feature_dim=768 sr=32000 clip_sec=10
-#   epoch ...: train_loss=... val_loss=...   (freeze первые --freeze-epochs)
-#   early-stop at epoch E (patience=P)        (если сработал)
-#   best_epoch=B best_val_loss=...
-#   checkpoint -> <out_checkpoint_dir>/  (meta.json + weights.pt)
-#   provenance: real-finetune (cluster iNatSounds)
+# ОЖИДАЕМЫЙ ВЫВОД (stdout, последняя строка)
+#   CLI делает один `print(summary)` — это dict от faun.training.finetune со
+#   ключами: epochs_run, start_epoch, best_epoch, best_val_loss, early_stopped,
+#   optimizer_steps, n_classes, feature_dim, checkpoint, provenance.
+#   Чекпойнт пишется в <out_checkpoint_dir>/ (meta.json + weights.pt),
+#   provenance="real-finetune ...".
 #   (любое число здесь — РЕАЛЬНАЯ species-метрика, т.к. прогон на настоящем
 #    iNatSounds с реальным трансформером; синтетика помечается иначе)
 #
 # 8GB ТАКТИКИ (зашиты в дефолты ниже, правь под память)
 #   batch_size 4-8 + grad_accum (эффективный батч = bs*accum), AMP fp16 autocast,
 #   заморозка бэкбона первые N эпох -> разморозка, param-group LR (голова > бэкбон
-#   ~10x), early-stop по val-loss, CosineAnnealing внутри оптимизатора.
+#   ~10x), early-stop по val-loss (статический param-group LR, без LR-расписания).
 # =============================================================================
 set -euo pipefail
 

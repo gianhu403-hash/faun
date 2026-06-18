@@ -18,15 +18,26 @@ non-positive numeric env var must NOT crash service boot. Such values fall back
 to the documented default and the misconfiguration is surfaced via a log
 warning rather than a traceback.
 
-Defaults (match what the code uses today + defensible hardening limits):
-    jobs_root                 ``./jobs``      (FAUN_JOBS_ROOT)
-    classifier                ``stub``        (FAUN_CLASSIFIER)
-    timeout_s                 ``30.0`` s      (FAUN_SOURCE_TIMEOUT_S)
-    max_bytes                 ``2 GiB``       (FAUN_SOURCE_MAX_BYTES) — download cap
-    max_uncompressed_bytes    ``4 GiB``       (FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES) — zip-bomb cap
-    max_entries               ``10000``       (FAUN_SOURCE_MAX_ENTRIES) — archive member cap
+NOTE on wiring status (read before trusting a value here): this module is the
+typed *home* for these knobs, but it is not yet the only *reader*. As of this
+iteration ``faun.sources`` still reads the ``FAUN_SOURCE_*`` vars directly (with
+the SAME defaults mirrored below — they are the enforced ceilings), and the
+model adapters still read ``PERCH_V2_MODEL_PATH`` / ``PERCH_MODEL_PATH`` /
+``YAMNET_PROBE_PATH`` directly. The corresponding ``Settings`` fields mirror
+those env vars and are the migration target; changing a ``Settings`` field in
+code does NOT yet change adapter/sources behaviour until that wiring lands.
+``jobs_root``, ``classifier`` and ``log_json`` ARE consumed via ``get_settings``
+(faun.api).
+
+Defaults (match the values faun.sources actually enforces):
+    jobs_root                 ``./jobs``      (FAUN_JOBS_ROOT)         [WIRED]
+    classifier                ``stub``        (FAUN_CLASSIFIER)        [WIRED]
+    timeout_s                 ``60.0`` s      (FAUN_SOURCE_TIMEOUT_S)
+    max_bytes                 ``30 GiB``      (FAUN_SOURCE_MAX_BYTES) — download cap
+    max_uncompressed_bytes    ``60 GiB``      (FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES) — zip-bomb cap
+    max_entries               ``100000``      (FAUN_SOURCE_MAX_ENTRIES) — archive member cap
     max_redirects             ``5``           (FAUN_SOURCE_MAX_REDIRECTS) — SSRF redirect cap
-    log_json                  ``True``        (FAUN_LOG_JSON)
+    log_json                  ``True``        (FAUN_LOG_JSON)          [WIRED]
     perch_v2_model_path       ``None``        (PERCH_V2_MODEL_PATH)
     perch_model_path          ``None``        (PERCH_MODEL_PATH)
     yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
@@ -48,10 +59,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_JOBS_ROOT = "./jobs"
 DEFAULT_CLASSIFIER = "stub"
-DEFAULT_TIMEOUT_S = 30.0
-DEFAULT_MAX_BYTES = 2 * 1024**3  # 2 GiB download cap
-DEFAULT_MAX_UNCOMPRESSED_BYTES = 4 * 1024**3  # 4 GiB zip-bomb cap
-DEFAULT_MAX_ENTRIES = 10_000  # archive member cap
+# Source-resolution hardening limits. These MIRROR the authoritative defaults in
+# faun.sources (the enforcing reader, which still reads FAUN_SOURCE_* directly).
+# They are sized for the real Yandex.Disk trap folders (~23 GB extracted per A1
+# folder, ~115 MB per WAV), NOT a conservative generic default — a 2 GiB cap
+# would reject a legitimate trap-folder pull. Keep these two in sync until
+# faun.sources is migrated to read Settings (see module docstring NOTE).
+DEFAULT_TIMEOUT_S = 60.0
+DEFAULT_MAX_BYTES = 30 * 1024**3  # 30 GiB on-the-wire download cap
+DEFAULT_MAX_UNCOMPRESSED_BYTES = 60 * 1024**3  # 60 GiB extracted (zip-bomb) cap
+DEFAULT_MAX_ENTRIES = 100_000  # archive member cap
 DEFAULT_MAX_REDIRECTS = 5  # SSRF redirect cap
 DEFAULT_LOG_JSON = True
 

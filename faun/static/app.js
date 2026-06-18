@@ -244,11 +244,11 @@ function renderSourceHint() {
   note.textContent = SOURCE_KIND_NOTES[kind] || SOURCE_KIND_NOTES.folder;
 }
 
-/* True when a source kind is fetched over the network before processing —
-   used to honestly split "downloading source" from "processing". */
-function isRemoteSource(value) {
-  const k = sourceKind(value);
-  return k === "url" || k === "yadisk";
+/* True when a source KIND is fetched over the network before processing —
+   used to honestly split "downloading source" from "processing". Takes a kind
+   ("folder"|"url"|"yadisk"), so callers that already have one don't re-sniff. */
+function isRemoteSource(kind) {
+  return kind === "url" || kind === "yadisk";
 }
 
 /* Honest running-phase label. A remote source is *downloaded* before it can be
@@ -261,7 +261,7 @@ function isRemoteSource(value) {
 function phaseLabel(kind, phase, progress) {
   if (phase === "download") return "Скачивание источника…";
   if (phase === "process") return "Обработка…";
-  const remote = kind === "url" || kind === "yadisk";
+  const remote = isRemoteSource(kind);
   if (remote && (typeof progress !== "number" || progress <= 0)) {
     return "Скачивание источника…";
   }

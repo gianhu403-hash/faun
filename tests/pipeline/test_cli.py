@@ -156,3 +156,68 @@ def test_eval_species_dispatch(monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "SYNTHETIC — not a species metric" in out
+
+
+# ---------------------------------------------------------------------------
+# Wave-3 completeness: finetune dispatch + process-<url> passthrough
+# ---------------------------------------------------------------------------
+
+
+def test_finetune_dispatch_forwards_args(tmp_path, monkeypatch):
+    """`faun finetune` wires argparse (incl. --no-amp/--no-class-weight) to finetune()."""
+    import faun.training as training
+
+    seen = {}
+
+    def spy(dataset_root, **kw):
+        seen["dataset_root"] = dataset_root
+        seen.update(kw)
+        return {"provenance": "SYNTHETIC — not a species metric", "best_epoch": 0}
+
+    monkeypatch.setattr(training, "finetune", spy)
+
+    out = tmp_path / "ckpt"
+    rc = main(
+        [
+            "finetune",
+            "--dataset",
+            str(_FIXTURES / "inatsounds_mini"),
+            "--out",
+            str(out),
+            "--model",
+            "passt",
+            "--no-amp",
+            "--no-class-weight",
+            "--epochs",
+            "1",
+        ]
+    )
+    assert rc == 0
+    assert seen["dataset_root"] == str(_FIXTURES / "inatsounds_mini")
+    assert seen["out"] == str(out)
+    assert seen["model"] == "passt"
+    assert seen["amp"] is False  # --no-amp store_false
+    assert seen["class_weight"] is False  # --no-class-weight store_false
+    assert seen["epochs"] == 1
+
+
+def test_process_url_passthrough_no_path_mangle(monkeypatch):
+    """`process <url>`: the URL reaches run_pipeline verbatim (// intact); job_dir isolated, not cwd."""
+    seen = {}
+
+    def fake_run_pipeline(job_dir, source_path, lat=None, lon=None, classifier=None):
+        seen["job_dir"] = Path(job_dir)
+        seen["source"] = source_path
+        results = Path(job_dir) / "results.csv"
+        results.write_text("x\n", encoding="utf-8")
+        return results
+
+    monkeypatch.setattr(api, "run_pipeline", fake_run_pipeline)
+
+    rc = main(["process", "https://disk.yandex.ru/d/KEY/A1"])
+    assert rc == 0
+    # The // must survive — this is the whole point of the P0 fix.
+    assert seen["source"] == "https://disk.yandex.ru/d/KEY/A1"
+    assert "https://" in seen["source"]
+    # URL jobs get an isolated fresh dir, not the operator's cwd.
+    assert seen["job_dir"] != Path.cwd()

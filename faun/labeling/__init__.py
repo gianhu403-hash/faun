@@ -30,6 +30,8 @@ import numpy as np
 from faun.classification import Prediction, SpeciesClassifier
 from faun.detections import (
     SOURCE_BIRDNET,
+    SOURCE_PERCH,
+    SOURCE_PERCH_V2,
     STATUS_PSEUDO,
     Detection,
     Label,
@@ -45,8 +47,14 @@ __all__ = ["batch_label", "training_candidates"]
 #: что и в ``faun.api.run_pipeline`` (НЕ сам объект Segment).
 CLASSIFY_SR = 16_000
 
-#: Имена моделей, образующих консенсус (оба должны согласиться на вид).
-_CONSENSUS_MODELS = ("perch", "birdnet")
+#: Консенсус-арки: детекция «в консенсусе», когда КАЖДАЯ арка дала вид и виды
+#: пересекаются. Арка Perch принимает Perch 1 ИЛИ Perch 2 — оператор может
+#: запустить любой (`--models perch-v2,birdnet`), и консенсус не должен молча
+#: обнуляться из-за смены имени модели. Каждая арка — множество допустимых source.
+_CONSENSUS_ARMS: tuple[frozenset[str], ...] = (
+    frozenset({SOURCE_PERCH, SOURCE_PERCH_V2}),  # арка Perch (v1 или v2)
+    frozenset({SOURCE_BIRDNET}),  # арка BirdNET
+)
 
 #: source'ы, запрещённые в обучающем наборе (лицензионный гейт).
 #: BirdNET = CC BY-NC-SA (non-commercial + ShareAlike).
@@ -90,14 +98,19 @@ def _to_classifier_input(clip: np.ndarray, sr: int) -> np.ndarray:
 
 
 def _consensus_species(detection: Detection) -> set[str]:
-    """Виды, предсказанные ОБЕИМИ моделями консенсуса для одной детекции."""
-    by_model: dict[str, set[str]] = {}
-    for name in _CONSENSUS_MODELS:
-        src = _model_source(name)
-        by_model[name] = {lbl.species for lbl in detection.labels if lbl.source == src}
-    if any(not species for species in by_model.values()):
+    """Виды, на которых сошлись ВСЕ консенсус-арки (Perch∩BirdNET) для детекции.
+
+    Арка Perch матчит и ``model:perch`` (Perch 1), и ``model:perch-v2`` (Perch 2),
+    так что выбор модели оператором не обнуляет консенсус молча.
+    """
+    by_arm: list[set[str]] = []
+    for arm_sources in _CONSENSUS_ARMS:
+        by_arm.append(
+            {lbl.species for lbl in detection.labels if lbl.source in arm_sources}
+        )
+    if any(not species for species in by_arm):
         return set()
-    return set.intersection(*by_model.values())
+    return set.intersection(*by_arm)
 
 
 def batch_label(

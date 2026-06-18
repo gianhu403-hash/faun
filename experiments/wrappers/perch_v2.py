@@ -54,9 +54,12 @@ def _infer(model, batch):
     out = serving(inputs=batch)
     emb = out["embedding"] if "embedding" in out else None
     logits = out["label"] if "label" in out else out.get("logits")
-    to_np = lambda t: (
-        None if t is None else np.asarray(t.numpy() if hasattr(t, "numpy") else t)
-    )
+
+    def to_np(t):
+        return (
+            None if t is None else np.asarray(t.numpy() if hasattr(t, "numpy") else t)
+        )
+
     return to_np(emb), to_np(logits)
 
 

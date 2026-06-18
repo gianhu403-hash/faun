@@ -127,7 +127,13 @@ def main(argv: list[str] | None = None) -> int:
             out = Path(args.out)
             job_dir = out.parent
         elif is_url:
-            job_dir = Path.cwd()
+            # A URL source has no local parent dir; isolate the job in a fresh
+            # per-run dir (mirrors the API's jobs_root/<id>/) so results.csv +
+            # segments/ + the extracted _source/ don't scatter across the
+            # operator's cwd or collide between runs.
+            import tempfile
+
+            job_dir = Path(tempfile.mkdtemp(prefix="faun-job-"))
             out = job_dir / "results.csv"
         else:
             out = Path(src_arg) / "results.csv"

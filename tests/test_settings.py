@@ -58,10 +58,12 @@ def test_defaults_when_env_empty(monkeypatch) -> None:
 
     assert s.jobs_root == Path("./jobs")
     assert s.classifier == "stub"
-    assert s.timeout_s == 30.0
-    assert s.max_bytes == 2 * 1024**3
-    assert s.max_uncompressed_bytes == 4 * 1024**3
-    assert s.max_entries == 10_000
+    # Source-limit defaults mirror faun.sources' authoritative (enforced) values,
+    # sized for real ~23 GB Yandex.Disk trap folders.
+    assert s.timeout_s == 60.0
+    assert s.max_bytes == 30 * 1024**3
+    assert s.max_uncompressed_bytes == 60 * 1024**3
+    assert s.max_entries == 100_000
     assert s.max_redirects == 5
     assert s.log_json is True
     assert s.perch_v2_model_path is None
@@ -138,15 +140,15 @@ def test_malformed_int_falls_back_to_default(monkeypatch) -> None:
 
     s = Settings.from_env()
 
-    assert s.max_entries == 10_000
+    assert s.max_entries == 100_000
     assert s.max_redirects == 5
-    assert s.max_bytes == 2 * 1024**3
+    assert s.max_bytes == 30 * 1024**3
 
 
 def test_malformed_float_falls_back_to_default(monkeypatch) -> None:
     """A non-numeric float var falls back to the documented default."""
     monkeypatch.setenv("FAUN_SOURCE_TIMEOUT_S", "soon")
-    assert Settings.from_env().timeout_s == 30.0
+    assert Settings.from_env().timeout_s == 60.0
 
 
 def test_negative_and_zero_limits_fall_back(monkeypatch) -> None:
@@ -157,9 +159,9 @@ def test_negative_and_zero_limits_fall_back(monkeypatch) -> None:
 
     s = Settings.from_env()
 
-    assert s.max_entries == 10_000
-    assert s.max_bytes == 2 * 1024**3
-    assert s.timeout_s == 30.0
+    assert s.max_entries == 100_000
+    assert s.max_bytes == 30 * 1024**3
+    assert s.timeout_s == 60.0
 
 
 def test_blank_string_paths_become_none(monkeypatch) -> None:
