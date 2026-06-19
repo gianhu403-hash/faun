@@ -158,9 +158,11 @@ class TestDownmixResample:
     def test_decimation_fallback_without_soxr(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import faun.segmentation as seg_mod
+        # The soxr-vs-fallback choice now lives in faun.audio (ADR-0002), so the
+        # fallback is exercised by patching the flag there.
+        import faun.audio as audio_mod
 
-        monkeypatch.setattr(seg_mod, "_HAS_SOXR", False)
+        monkeypatch.setattr(audio_mod, "_HAS_SOXR", False)
         mono = _burst(1.0, SR_48K)
         out = SegmentExtractor._resample(mono, SR_48K)
         assert len(out) == TARGET_SR

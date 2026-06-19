@@ -1,11 +1,13 @@
-fastapi
-uvicorn[standard]
-python-multipart
-numpy
-soundfile
-soxr
-pydantic
-aiofiles
-httpx
-scipy
-scikit-learn
+# Faun v2 batch-pipeline (TF-free). Pinned to exact resolved versions for
+# reproducible deploy images; heavy ML libs (TF/torch) stay lazy, not listed here.
+fastapi==0.135.1
+uvicorn[standard]==0.42.0
+python-multipart==0.0.22
+numpy==2.2.6
+soundfile==0.13.1
+soxr==1.0.0
+pydantic==2.12.5
+aiofiles==25.1.0
+httpx==0.28.1
+scipy==1.14.1
+scikit-learn==1.5.0

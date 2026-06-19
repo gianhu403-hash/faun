@@ -103,3 +103,38 @@ def save_checkpoint(...) / load_checkpoint(...)   # {state_dict, vocab, model_na
 # faun/cli (additive): faun finetune --dataset <root> --out <ckpt_dir> [--model passt|ast|beats] [...];
 #   --embedder now also accepts perch-v2 (batch-label / eval-species).
 ```
+
+## v3 additions — audio/pipeline owners, Basic-Auth, ops (ADDITIVE)
+
+Added by the prod-ready wave. Every FROZEN signature above is unchanged: run_pipeline and
+batch_label keep their exact signatures (they became thin wrappers over faun.pipeline.run_batch);
+ingest.scan, CSV columns and detections.jsonl are untouched. These are new modules + additive knobs.
+
+```python
+# faun/audio: the SINGLE owner of audio preprocessing (ADR-0002). numpy + soxr only.
+def downmix(waveform: np.ndarray) -> np.ndarray            # stereo/multi -> mono float32
+def resample(mono: np.ndarray, sr: int, target_sr: int) -> np.ndarray   # soxr (linear fallback); sr<=0 -> ValueError
+def fit_window(mono: np.ndarray, win_samples: int) -> np.ndarray        # pad-right or truncate to exactly win_samples
+#   faun.embeddings re-exports these as _downmix/_resample/_fit_window — SAME objects
+#   (frozen import in faun/training/dataset.py; invariant: faun.embeddings._downmix is faun.audio.downmix).
+
+# faun/pipeline: reusable executor for the shared segment->classify->Detection core (ADR-0003).
+CLASSIFY_SR = 16000   # classifier-input contract (mono float32 @ 16 kHz, NOT a Segment)
+def slice_clip(waveform, sr, segment) -> np.ndarray         # clip on ORIGINAL sr/channels (bounds clamped)
+def to_classifier_input(clip, sr) -> np.ndarray             # downmix + resample to 16 kHz mono (via faun.audio)
+@dataclass class SegmentResult(detection: Detection, clip: np.ndarray, sr: int)
+def run_batch(entries, *, read_waveform, build_labels, extractor=None) -> Iterator[SegmentResult]
+#   GENERATOR; yields one SegmentResult per detected segment with clip ROW-ALIGNED to detection
+#   (the contract batch_label's embeddings export relies on). run_pipeline + batch_label use it.
+
+# faun/settings: + basic_user / basic_pass (None|str), read VERBATIM (no strip) via _env_secret_opt
+#   from FAUN_BASIC_USER / FAUN_BASIC_PASS. get_settings() is now the actual reader across
+#   api/sources/adapters/health.
+# faun/health: FAUN_VERSION sourced from os.environ (default "2.0.0-rc") so /healthz reflects the build.
+
+# faun/api: env-gated HTTP Basic Auth middleware. Both FAUN_BASIC_USER+PASS set -> every path
+#   EXCEPT /healthz requires Basic creds (hmac.compare_digest; 401 + WWW-Authenticate); either unset
+#   -> default-OPEN (no behaviour change). JobRequest.lat/lon get WGS84 Field bounds (reject NaN/Inf/
+#   out-of-range -> 422); LabelRequest.species/source get length bounds. run_pipeline + batch_label
+#   remove <workdir>/_source on exit (finally) — the remote-ingest disk-leak guard.
+```

@@ -16,19 +16,19 @@ TensorFlow. If TF is unavailable at call time, ``classify``/``embed`` raise
 
 Model source resolution:
     1. ``model_path`` constructor argument, or
-    2. ``PERCH_MODEL_PATH`` environment variable (local SavedModel dir), or
+    2. ``PERCH_MODEL_PATH`` (via :func:`faun.settings.get_settings`), or
     3. ``DEFAULT_TFHUB_URL`` (Perch 1, no auth).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
 import numpy as np
 import soxr
 
 from faun.classification import Prediction
+from faun.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,8 @@ class PerchAdapter:
 
     Args:
         model_path: Local SavedModel directory or TF-Hub URL. Falls back to
-            ``PERCH_MODEL_PATH`` env, then ``DEFAULT_TFHUB_URL``.
+            ``PERCH_MODEL_PATH`` (via ``get_settings``), then
+            ``DEFAULT_TFHUB_URL``.
         labels: Optional class label list aligned with the logits output. When
             absent, predictions are named ``species_<i>``.
         top_k: Maximum number of predictions returned by ``classify``.
@@ -56,7 +57,7 @@ class PerchAdapter:
         top_k: int = 5,
     ) -> None:
         self.model_path = (
-            model_path or os.environ.get("PERCH_MODEL_PATH") or DEFAULT_TFHUB_URL
+            model_path or get_settings().perch_model_path or DEFAULT_TFHUB_URL
         )
         self.labels = labels
         self.top_k = top_k

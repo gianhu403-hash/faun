@@ -22,6 +22,7 @@ stdlib + numpy; тяжёлый ML — только через переданны
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Mapping
 
@@ -33,19 +34,16 @@ from faun.detections import (
     SOURCE_PERCH,
     SOURCE_PERCH_V2,
     STATUS_PSEUDO,
+    TRAINING_EXCLUDED_SOURCES,
     Detection,
     Label,
     write_detections,
 )
 from faun.embeddings import Embedder, EmbeddingCache, _embedder_dim, embed_batch
 from faun.ingest import scan
-from faun.segmentation import SegmentExtractor
+from faun.pipeline import CLASSIFY_SR, run_batch
 
 __all__ = ["batch_label", "training_candidates"]
-
-#: Классификаторы получают mono @ 16 кГц — тот же контракт SpeciesClassifier,
-#: что и в ``faun.api.run_pipeline`` (НЕ сам объект Segment).
-CLASSIFY_SR = 16_000
 
 #: Консенсус-арки: детекция «в консенсусе», когда КАЖДАЯ арка дала вид и виды
 #: пересекаются. Арка Perch принимает Perch 1 ИЛИ Perch 2 — оператор может
@@ -55,10 +53,6 @@ _CONSENSUS_ARMS: tuple[frozenset[str], ...] = (
     frozenset({SOURCE_PERCH, SOURCE_PERCH_V2}),  # арка Perch (v1 или v2)
     frozenset({SOURCE_BIRDNET}),  # арка BirdNET
 )
-
-#: source'ы, запрещённые в обучающем наборе (лицензионный гейт).
-#: BirdNET = CC BY-NC-SA (non-commercial + ShareAlike).
-_TRAINING_EXCLUDED_SOURCES = frozenset({SOURCE_BIRDNET})
 
 
 def _model_source(name: str) -> str:
@@ -72,29 +66,6 @@ def _read_clip(path: Path) -> tuple[np.ndarray, int]:
 
     waveform, sr = sf.read(str(path))
     return np.asarray(waveform, dtype=np.float32), int(sr)
-
-
-def _slice_segment(waveform: np.ndarray, sr: int, segment) -> np.ndarray:
-    """Вырезать клип сегмента из исходного сигнала на исходной sr."""
-    start = max(0, int(round(segment.start_s * sr)))
-    end = min(len(waveform), int(round(segment.end_s * sr)))
-    return waveform[start:end]
-
-
-def _to_classifier_input(clip: np.ndarray, sr: int) -> np.ndarray:
-    """Downmix mono + resample до 16 кГц — вход адаптеров (как в run_pipeline).
-
-    Контракт ``SpeciesClassifier.classify`` принимает waveform-массив на 16 кГц,
-    а НЕ объект ``Segment``; реальные адаптеры (Perch/BirdNET/YAMNet) делают
-    ``np.asarray(segment)`` — поэтому сюда нельзя передавать сам Segment.
-    """
-    import soxr
-
-    mono = clip if clip.ndim == 1 else clip.mean(axis=1)
-    mono = np.asarray(mono, dtype=np.float32)
-    if sr == CLASSIFY_SR:
-        return mono
-    return soxr.resample(mono, sr, CLASSIFY_SR)
 
 
 def _consensus_species(detection: Detection) -> set[str]:
@@ -143,71 +114,72 @@ def batch_label(
             }
     """
     out_jsonl = Path(out_jsonl)
-    extractor = SegmentExtractor()
 
-    detections: list[Detection] = []
     counts: dict[str, int] = {name: 0 for name in models}
-    # Клипы (waveform, sr на исходной частоте), выровненные по строкам с
-    # ``detections`` — собираются в ЕДИНСТВЕННОМ проходе для опц. эмбеддинга.
-    clips: list[tuple[np.ndarray, int]] = []
+
+    def _build_labels(classifier_input: np.ndarray) -> list[Label]:
+        """Map a 16 kHz mono clip through every model -> pseudo-labels."""
+        labels: list[Label] = []
+        for name, model in models.items():
+            source = _model_source(name)
+            predictions: list[Prediction] = model.classify(
+                classifier_input, CLASSIFY_SR
+            )
+            for pred in predictions:
+                labels.append(Label.from_prediction(pred, source, status=STATUS_PSEUDO))
+                counts[name] += 1
+        return labels
 
     from faun.sources import resolve_source
 
-    # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
-    scan_dir = resolve_source(str(archive), out_jsonl.parent)
-    manifest = scan(scan_dir)
-    for entry in manifest.entries:
-        waveform, sr = _read_clip(entry.path)
-        for segment in extractor.extract(waveform, sr):
-            clip = _slice_segment(waveform, sr, segment)
-            classifier_input = _to_classifier_input(clip, sr)
-            labels: list[Label] = []
-            for name, model in models.items():
-                source = _model_source(name)
-                predictions: list[Prediction] = model.classify(
-                    classifier_input, CLASSIFY_SR
-                )
-                for pred in predictions:
-                    labels.append(
-                        Label.from_prediction(pred, source, status=STATUS_PSEUDO)
-                    )
-                    counts[name] += 1
-            detections.append(
-                Detection.new(
-                    trap_id=entry.trap_id,
-                    source_file=entry.path.name,
-                    segment=segment,
-                    labels=labels,
-                )
+    try:
+        # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
+        scan_dir = resolve_source(str(archive), out_jsonl.parent)
+        manifest = scan(scan_dir)
+
+        # Single shared executor pass (faun.pipeline.run_batch): detections + their
+        # original-sr clips (waveform, sr) row-aligned for the optional embeddings
+        # export. Reading at float32 here keeps batch_label's prior dtype behaviour.
+        results = list(
+            run_batch(
+                manifest.entries, read_waveform=_read_clip, build_labels=_build_labels
             )
-            clips.append((clip, sr))
-
-    write_detections(out_jsonl, detections)
-
-    n_consensus = sum(1 for det in detections if _consensus_species(det))
-
-    summary: dict = {
-        "counts": counts,
-        "n_detections": len(detections),
-        "n_consensus": n_consensus,
-        "paths": {"detections": str(out_jsonl)},
-    }
-
-    # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера. Переиспользуем
-    # единый владелец ``embed_batch`` (без повторного чтения/сегментации файлов;
-    # строки выровнены с detections по порядку сбора).
-    if emb_out is not None and embedder is not None:
-        emb_out = Path(emb_out)
-        embeddings = (
-            embed_batch(clips, embedder)
-            if clips
-            else np.zeros((0, _embedder_dim(embedder)), dtype=np.float32)
         )
-        ids = [det.detection_id for det in detections]
-        EmbeddingCache(embeddings=embeddings, ids=ids).save(emb_out)
-        summary["paths"]["embeddings"] = str(emb_out)
+        detections: list[Detection] = [r.detection for r in results]
+        clips: list[tuple[np.ndarray, int]] = [(r.clip, r.sr) for r in results]
 
-    return summary
+        write_detections(out_jsonl, detections)
+
+        n_consensus = sum(1 for det in detections if _consensus_species(det))
+
+        summary: dict = {
+            "counts": counts,
+            "n_detections": len(detections),
+            "n_consensus": n_consensus,
+            "paths": {"detections": str(out_jsonl)},
+        }
+
+        # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера. Переиспользуем
+        # единый владелец ``embed_batch`` (без повторного чтения/сегментации файлов;
+        # строки выровнены с detections по порядку сбора).
+        if emb_out is not None and embedder is not None:
+            emb_out = Path(emb_out)
+            embeddings = (
+                embed_batch(clips, embedder)
+                if clips
+                else np.zeros((0, _embedder_dim(embedder)), dtype=np.float32)
+            )
+            ids = [det.detection_id for det in detections]
+            EmbeddingCache(embeddings=embeddings, ids=ids).save(emb_out)
+            summary["paths"]["embeddings"] = str(emb_out)
+
+        return summary
+    finally:
+        # B1 disk-leak (symmetry with run_pipeline): drop the downloaded/extracted
+        # REMOTE source tree on exit. resolve_source creates out_jsonl.parent/_source
+        # ONLY for a remote archive; a local pass-through dir is Path(archive)
+        # OUTSIDE out_jsonl.parent and is never touched.
+        shutil.rmtree(out_jsonl.parent / "_source", ignore_errors=True)
 
 
 def training_candidates(detections) -> list:
@@ -223,7 +195,7 @@ def training_candidates(detections) -> list:
     result: list[Detection] = []
     for det in detections:
         kept = [
-            lbl for lbl in det.labels if lbl.source not in _TRAINING_EXCLUDED_SOURCES
+            lbl for lbl in det.labels if lbl.source not in TRAINING_EXCLUDED_SOURCES
         ]
         if not kept:
             continue

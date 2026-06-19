@@ -10,9 +10,17 @@
 #   pip install -r requirements-pipeline.txt -r requirements-train.txt
 # =============================================================================
 
-# --- PyTorch стек (CPU локально 2.5.1; на кластере — CUDA-сборка под GPU) -----
-torch>=2.2,<2.7
-torchaudio>=2.2,<2.7
+# --- PyTorch стек (cluster-only; в CI / локальном control-flow НЕ ставится) ---
+# Кластер cluster-alex ставит с индекса cu130 (CUDA 13). ПРОВЕРЕНО на кластере
+# 2026-06-19: cu130-колёса torch — 2.9.0..2.12.1 (УСТАНОВЛЕНО 2.12.0+cu130);
+# прежний потолок <2.7 был НЕустановим на cu130 (колёс ниже 2.9 там нет).
+# Floor >=2.9 заодно закрывает CVE-2025-32434 (RCE в torch.load, патч 2.6.0),
+# затрагивавший faun.training.load_checkpoint/resume; 2.12 на кластере уже патчен.
+torch>=2.9,<2.13
+# torchaudio: cu130-колёса 2.9.0..2.11.0; в образе faun-ml-torch НЕ установлен,
+# fine-tune (PaSST) его не требует (свой mel-frontend). Держим аддитивно в
+# cu130-совместимом диапазоне; ставить только если конкретный бэкбон попросит.
+torchaudio>=2.9,<2.12
 
 # --- PaSST (продуктовый дефолт-бэкбон): код Apache-2.0; нативно 32 кГц ---------
 #   from hear21passt.base import get_basic_model, get_model_passt

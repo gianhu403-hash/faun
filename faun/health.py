@@ -15,10 +15,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path  # noqa: F401 — re-exported for test monkeypatch of Path.mkdir
 
-#: Версия сервиса для health-payload (release candidate v2).
-FAUN_VERSION = "2.0.0-rc"
+from faun.settings import get_settings
+
+#: Версия сервиса для health-payload. Берётся из env ``FAUN_VERSION`` (деплой
+#: передаёт билд-тег через ``--build-arg``/``-e``), дефолт — release candidate.
+#: Так ``/healthz`` отражает реально задеплоенный образ (health-gate сверяет тег).
+FAUN_VERSION = os.environ.get("FAUN_VERSION", "2.0.0-rc")
 
 #: Имя сервиса в payload — совпадает с title FastAPI-app.
 SERVICE_NAME = "faun-api"
@@ -27,13 +31,13 @@ SERVICE_NAME = "faun-api"
 def _jobs_root_ok() -> bool:
     """Дешёвая readiness-проверка: каталог job-ов существует и в него пишется.
 
-    Повторяет резолв ``faun.api.jobs_root`` (env ``FAUN_JOBS_ROOT``, default
-    ``./jobs``), но БЕЗ импорта api-модуля — чтобы handler не тянул FastAPI и
-    оставался TF-free. Любое исключение глотаем и возвращаем ``False``: health
-    обязан деградировать, а не падать.
+    Берёт ``jobs_root`` из ``faun.settings.get_settings()`` (единый типизированный
+    дом для ``FAUN_JOBS_ROOT``), но БЕЗ импорта api-модуля — чтобы handler не
+    тянул FastAPI и оставался TF-free. Любое исключение глотаем и возвращаем
+    ``False``: health обязан деградировать, а не падать.
     """
     try:
-        root = Path(os.environ.get("FAUN_JOBS_ROOT", "./jobs"))
+        root = get_settings().jobs_root
         root.mkdir(parents=True, exist_ok=True)
         return os.access(root, os.W_OK)
     except Exception:  # noqa: BLE001 — readiness НИКОГДА не должна бросать

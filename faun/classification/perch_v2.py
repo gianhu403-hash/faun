@@ -19,7 +19,7 @@ Inference path (NOT Perch 1's ``hub.load().infer_tf``)::
 
 Source resolution (in order):
     1. ``model_path`` constructor argument (local SavedModel dir), or
-    2. ``PERCH_V2_MODEL_PATH`` environment variable, or
+    2. ``get_settings().perch_v2_model_path`` (the ``PERCH_V2_MODEL_PATH`` env), or
     3. ``kagglehub.model_download(<handle>)`` — REQUIRES Kaggle credentials.
 
 **Creds / honesty gate.** Google's Perch 2 Kaggle model is consent-gated; an
@@ -43,9 +43,10 @@ import os
 from pathlib import Path
 
 import numpy as np
-import soxr
 
+from faun import audio
 from faun.classification import Prediction
+from faun.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,8 @@ class Perch2Adapter:
 
     Args:
         model_path: Local SavedModel directory. Falls back to
-            ``PERCH_V2_MODEL_PATH`` env, then a credential-gated Kaggle download.
+            ``get_settings().perch_v2_model_path`` (the ``PERCH_V2_MODEL_PATH``
+            env), then a credential-gated Kaggle download.
         labels: Optional class label list aligned with the ``label`` logits.
             When absent, predictions are named ``species_<i>``. Real labels live
             in ``<model_path>/assets/*.csv``.
@@ -108,7 +110,7 @@ class Perch2Adapter:
         top_k: int = 5,
         cpu: bool = False,
     ) -> None:
-        resolved = model_path or os.environ.get("PERCH_V2_MODEL_PATH")
+        resolved = model_path or get_settings().perch_v2_model_path
         if not resolved and not _kaggle_creds_present():
             raise RuntimeError(
                 "Perch 2 requires either a local SavedModel path "
@@ -168,16 +170,15 @@ class Perch2Adapter:
         return self._model
 
     def _prepare(self, waveform: np.ndarray, sr: int) -> np.ndarray:
-        """Downmix to mono, resample to 32 kHz, peak-normalize, fit to 5 s."""
-        wav = np.asarray(waveform, dtype=np.float32)
-        if wav.ndim > 1:
-            wav = wav.mean(axis=1)
-        if sr != PERCH_V2_SR:
-            wav = soxr.resample(wav, sr, PERCH_V2_SR)
-        if len(wav) < PERCH_V2_WINDOW_SAMPLES:
-            wav = np.pad(wav, (0, PERCH_V2_WINDOW_SAMPLES - len(wav)))
-        elif len(wav) > PERCH_V2_WINDOW_SAMPLES:
-            wav = wav[:PERCH_V2_WINDOW_SAMPLES]
+        """Downmix to mono, resample to 32 kHz, fit to 5 s, then peak-normalize.
+
+        Downmix / resample / fit-to-window are delegated to :mod:`faun.audio`
+        (single preprocessing owner, ADR-0002); the Perch-2-specific peak
+        normalization to :data:`PERCH_V2_PEAK` stays here.
+        """
+        wav = audio.downmix(waveform)
+        wav = audio.resample(wav, sr, PERCH_V2_SR)
+        wav = audio.fit_window(wav, PERCH_V2_WINDOW_SAMPLES)
         peak = float(np.max(np.abs(wav))) if wav.size else 0.0
         if peak > 0.0:
             wav = (wav / peak) * PERCH_V2_PEAK
@@ -190,18 +191,21 @@ class Perch2Adapter:
     def _infer(self, waveform: np.ndarray, sr: int):
         """Run the serving signature, returning ``(logits, embedding)`` numpy.
 
-        Calls ``model.signatures['serving_default'](inputs=data)`` where ``data``
-        is float32 ``(N, 160000)`` — the Perch 2 path, NOT Perch-1's
-        ``infer_tf``. Reads ``label`` (logits) and ``embedding`` from the dict.
+        Reuses the canonical serving call in
+        ``experiments.wrappers.perch_v2._infer`` (which runs
+        ``model.signatures['serving_default'](inputs=data)`` — the Perch 2 path,
+        NOT Perch-1's ``infer_tf`` — and reads ``embedding`` + ``label`` from the
+        dict). The wrapper returns ``(embedding, logits)``; this adapter returns
+        ``(logits, embedding)``. The wrapper is imported lazily so importing this
+        module stays TF-free.
         """
+        from experiments.wrappers import perch_v2 as _perch_v2_wrapper
+
         model = self._load()
         wav = self._prepare(waveform, sr)
         data = wav[np.newaxis, :]
-        serving = model.signatures["serving_default"]
-        out = serving(inputs=data)
-        logits = out["label"] if "label" in out else out.get("logits")
-        embedding = out["embedding"]
-        return self._to_numpy(logits), self._to_numpy(embedding)
+        emb, logits = _perch_v2_wrapper._infer(model, data)
+        return self._to_numpy(logits), self._to_numpy(emb)
 
     def embed(self, waveform: np.ndarray, sr: int) -> np.ndarray:
         """Return the Perch 2 ``embedding`` for ``waveform`` (for few-shot).

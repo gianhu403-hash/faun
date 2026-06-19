@@ -4,9 +4,10 @@ Contract (faun/INTERFACES.md, frozen):
     SegmentExtractor.extract(waveform, sr) -> list[Segment]
     Segment(start_s, duration_s)
 
-Internally: downmix stereo -> mono (mean), resample to 16 kHz (soxr, with a
-plain decimation/interpolation fallback), then detect events with the
-calibrated detector in ``faun.ml.onset``.
+Internally: downmix stereo -> mono (mean), resample to 16 kHz, then detect
+events with the calibrated detector in ``faun.ml.onset``. The downmix/resample
+primitives are delegated to :mod:`faun.audio` (single preprocessing owner,
+ADR-0002); the soxr-vs-fallback choice lives there.
 """
 
 from __future__ import annotations
@@ -15,14 +16,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from faun import audio
 from faun.ml.onset import OnsetDetector
-
-try:
-    import soxr
-
-    _HAS_SOXR = True
-except ImportError:  # pragma: no cover - soxr is in requirements-pipeline.txt
-    _HAS_SOXR = False
 
 __all__ = ["Segment", "SegmentExtractor"]
 
@@ -101,28 +96,13 @@ class SegmentExtractor:
 
     @staticmethod
     def _downmix(waveform: np.ndarray) -> np.ndarray:
-        """Stereo/multichannel -> mono float32 via channel mean."""
-        if waveform.ndim == 1:
-            return waveform.astype(np.float32, copy=False)
-        if waveform.ndim != 2:
-            raise ValueError(f"expected 1-D or 2-D waveform, got ndim={waveform.ndim}")
-        # soundfile yields (frames, channels); also accept (channels, frames).
-        channel_axis = 1 if waveform.shape[1] <= waveform.shape[0] else 0
-        return waveform.mean(axis=channel_axis).astype(np.float32)
+        """Stereo/multichannel -> mono float32 (delegates to :mod:`faun.audio`)."""
+        return audio.downmix(waveform)
 
     @staticmethod
     def _resample(mono: np.ndarray, sr: int) -> np.ndarray:
-        """Resample mono audio to TARGET_SR (soxr, fallback: naive)."""
-        if sr == TARGET_SR:
-            return mono
-        if _HAS_SOXR:
-            return soxr.resample(mono, sr, TARGET_SR).astype(np.float32)
-        # Fallback without soxr: integer decimation or linear interpolation.
-        if sr % TARGET_SR == 0:
-            return np.ascontiguousarray(mono[:: sr // TARGET_SR])
-        n_out = int(round(len(mono) * TARGET_SR / sr))
-        x_out = np.linspace(0.0, len(mono) - 1, n_out)
-        return np.interp(x_out, np.arange(len(mono)), mono).astype(np.float32)
+        """Resample mono audio to TARGET_SR (delegates to :mod:`faun.audio`)."""
+        return audio.resample(mono, sr, TARGET_SR)
 
     def _detect_onsets(self, audio: np.ndarray) -> list[float]:
         """Chunked stateful onset detection; returns onset times in seconds."""
