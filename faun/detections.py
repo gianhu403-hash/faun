@@ -37,6 +37,7 @@ __all__ = [
     "STATUS_PSEUDO",
     "STATUS_CONFIRMED",
     "STATUS_CORRECTED",
+    "TRAINING_EXCLUDED_SOURCES",
     "Label",
     "Detection",
     "is_ground_truth",
@@ -63,6 +64,12 @@ _GROUND_TRUTH_STATUSES = frozenset({STATUS_CONFIRMED, STATUS_CORRECTED})
 
 #: Source prefixes that denote a human-provided label.
 _HUMAN_PREFIXES = ("expert:", "operator:")
+
+#: Source's forbidden in any training set (license gate). BirdNET is
+#: CC BY-NC-SA (non-commercial + ShareAlike) — its labels never enter a
+#: training set for the commercial head. Single home; ``faun.labeling`` imports
+#: this rather than mirroring it.
+TRAINING_EXCLUDED_SOURCES = frozenset({SOURCE_BIRDNET})
 
 
 def _utcnow() -> str:
@@ -191,15 +198,27 @@ class Detection:
         )
 
 
-def is_ground_truth(label: Label) -> bool:
+def _label_field(label: Any, key: str) -> Any:
+    """Read ``key`` from a label given as a mapping or an attribute object."""
+    if isinstance(label, dict):
+        return label.get(key)
+    return getattr(label, key, None)
+
+
+def is_ground_truth(label: Label | dict[str, Any]) -> bool:
     """True iff ``label`` is human-provided AND confirmed/corrected.
 
-    Model sources ("model:*", always status "pseudo") are never ground truth.
+    The single home for the ground-truth predicate: ``faun.retraining`` imports
+    this rather than mirroring it. Accepts a :class:`Label` object (``.source`` /
+    ``.status``) or an equivalent mapping (``["source"]`` / ``["status"]``); if
+    either field is missing or not a string, returns ``False``. Model sources
+    ("model:*", always status "pseudo") are never ground truth.
     """
-    return (
-        label.source.startswith(_HUMAN_PREFIXES)
-        and label.status in _GROUND_TRUTH_STATUSES
-    )
+    source = _label_field(label, "source")
+    status = _label_field(label, "status")
+    if not isinstance(source, str) or not isinstance(status, str):
+        return False
+    return source.startswith(_HUMAN_PREFIXES) and status in _GROUND_TRUTH_STATUSES
 
 
 def write_detections(

@@ -33,6 +33,7 @@ from faun.detections import (
     SOURCE_PERCH,
     SOURCE_PERCH_V2,
     STATUS_PSEUDO,
+    TRAINING_EXCLUDED_SOURCES,
     Detection,
     Label,
     write_detections,
@@ -55,10 +56,6 @@ _CONSENSUS_ARMS: tuple[frozenset[str], ...] = (
     frozenset({SOURCE_PERCH, SOURCE_PERCH_V2}),  # арка Perch (v1 или v2)
     frozenset({SOURCE_BIRDNET}),  # арка BirdNET
 )
-
-#: source'ы, запрещённые в обучающем наборе (лицензионный гейт).
-#: BirdNET = CC BY-NC-SA (non-commercial + ShareAlike).
-_TRAINING_EXCLUDED_SOURCES = frozenset({SOURCE_BIRDNET})
 
 
 def _model_source(name: str) -> str:
@@ -223,7 +220,7 @@ def training_candidates(detections) -> list:
     result: list[Detection] = []
     for det in detections:
         kept = [
-            lbl for lbl in det.labels if lbl.source not in _TRAINING_EXCLUDED_SOURCES
+            lbl for lbl in det.labels if lbl.source not in TRAINING_EXCLUDED_SOURCES
         ]
         if not kept:
             continue

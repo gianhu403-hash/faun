@@ -25,10 +25,9 @@ from typing import Any
 
 import numpy as np
 
-# Shared ground-truth semantics (mirrored, NOT imported from faun.detections so
-# this module stays decoupled from the parallel Phase-2 build).
-_GROUND_TRUTH_SOURCE_PREFIXES = ("expert:", "operator:")
-_GROUND_TRUTH_STATUSES = frozenset({"confirmed", "corrected"})
+# Single home for the ground-truth predicate — imported, not mirrored.
+# (faun.detections does NOT import faun.retraining, so this is acyclic.)
+from faun.detections import is_ground_truth
 
 
 def _field(label: Any, key: str) -> Any:
@@ -36,24 +35,6 @@ def _field(label: Any, key: str) -> Any:
     if isinstance(label, dict):
         return label.get(key)
     return getattr(label, key, None)
-
-
-def is_ground_truth(label: Any) -> bool:
-    """True iff ``label`` is a human ground-truth label.
-
-    Ground truth IFF ``source`` starts with ``expert:`` or ``operator:`` AND
-    ``status`` is ``confirmed`` or ``corrected``. Accepts dicts (``["source"]``
-    / ``["status"]``) or objects (``.source`` / ``.status``). Model sources
-    (``model:*``, always ``pseudo``) are never ground truth.
-    """
-    source = _field(label, "source")
-    status = _field(label, "status")
-    if not isinstance(source, str) or not isinstance(status, str):
-        return False
-    return (
-        source.startswith(_GROUND_TRUTH_SOURCE_PREFIXES)
-        and status in _GROUND_TRUTH_STATUSES
-    )
 
 
 def filter_ground_truth(labels) -> list:

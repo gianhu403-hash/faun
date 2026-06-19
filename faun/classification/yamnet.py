@@ -11,7 +11,8 @@ engine / …) — that head is useless for bird species. Instead it uses YAMNet'
 
 Probe resolution order:
     1. explicit ``probe`` object passed to the constructor, or
-    2. ``probe_path`` (constructor or ``YAMNET_PROBE_PATH`` env), loaded lazily.
+    2. ``probe_path`` (constructor or ``YAMNET_PROBE_PATH`` via
+       :func:`faun.settings.get_settings`), loaded lazily.
 
 If no probe is configured, ``classify`` returns a single
 ``Prediction("embedding_only", 0.0)`` and stashes the pooled embedding on
@@ -25,12 +26,12 @@ importing this module does not pull them.
 from __future__ import annotations
 
 import logging
-import os
 
 import numpy as np
 import soxr
 
 from faun.classification import Prediction
+from faun.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ class YAMNetAdapter:
             ``__call__`` returning per-class scores (Keras). Takes precedence
             over ``probe_path``.
         probe_path: Path to a ``.keras`` or pickled sklearn probe. Falls back to
-            the ``YAMNET_PROBE_PATH`` environment variable.
+            ``YAMNET_PROBE_PATH`` (via ``get_settings``).
         labels: Optional class label list aligned with probe outputs. When
             absent, predictions are named ``class_<i>``.
         top_k: Maximum number of predictions returned by ``classify``.
@@ -60,7 +61,7 @@ class YAMNetAdapter:
         top_k: int = 5,
     ) -> None:
         self._probe = probe
-        self.probe_path = probe_path or os.environ.get("YAMNET_PROBE_PATH")
+        self.probe_path = probe_path or get_settings().yamnet_probe_path
         self.labels = labels
         self.top_k = top_k
         self.last_embedding: np.ndarray | None = None

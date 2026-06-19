@@ -39,6 +39,12 @@ Security is merge-blocking:
 
 Heavy import (``httpx``) is module-level here because httpx is a core pipeline
 dependency (requirements-pipeline.txt); TF-class deps are not pulled in.
+
+Configuration: the SSRF / zip-bomb / size / timeout limits are sourced from
+:func:`faun.settings.get_settings` (the single typed home for ``FAUN_SOURCE_*``),
+read at call time so a per-test environment override picks up after
+``get_settings.cache_clear()``. The ``_int_env`` helper remains the call-time
+indirection for the uncompressed cap (its default now comes from Settings).
 """
 
 from __future__ import annotations
@@ -54,6 +60,8 @@ from typing import Any
 
 import httpx
 
+from faun.settings import get_settings
+
 __all__ = [
     "SourceError",
     "resolve_source",
@@ -61,14 +69,10 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Configuration (env with safe defaults; orchestrator swaps to faun.settings)
+# Configuration — limits live in faun.settings (FAUN_SOURCE_* knobs). Retry
+# tuning is local: tests patch _MAX_RETRIES / _BACKOFF_BASE_S directly.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TIMEOUT_S = 60.0
-_DEFAULT_MAX_BYTES = 30 * 1024 * 1024 * 1024  # 30 GiB on-the-wire ceiling
-_DEFAULT_MAX_UNCOMPRESSED = 60 * 1024 * 1024 * 1024  # 60 GiB extracted ceiling
-_DEFAULT_MAX_ENTRIES = 100_000
-_DEFAULT_MAX_REDIRECTS = 5
 _MAX_RETRIES = 3
 _BACKOFF_BASE_S = 0.5  # patched to 0 in tests
 
@@ -109,21 +113,18 @@ class SourceError(RuntimeError):
 
 
 def _int_env(name: str, default: int) -> int:
+    """Read an int ``FAUN_SOURCE_*`` env var, falling back to ``default``.
+
+    Call-time indirection for the uncompressed cap in :func:`_extract`: the
+    ``default`` is supplied by ``get_settings()`` (which itself reflects the env
+    after a cache clear), while a direct env override still wins here so a
+    per-test ``monkeypatch.setenv`` takes effect without clearing the cache.
+    """
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
         return default
     try:
         return int(raw)
-    except ValueError:
-        return default
-
-
-def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return float(raw)
     except ValueError:
         return default
 
@@ -299,8 +300,9 @@ def _stream_to_file(
     request that targets it is issued, bounded by ``FAUN_SOURCE_MAX_REDIRECTS``.
     Raises ``SourceError`` (``network`` is retryable upstream).
     """
-    max_bytes = _int_env("FAUN_SOURCE_MAX_BYTES", _DEFAULT_MAX_BYTES)
-    max_redirects = _int_env("FAUN_SOURCE_MAX_REDIRECTS", _DEFAULT_MAX_REDIRECTS)
+    settings = get_settings()
+    max_bytes = settings.max_bytes
+    max_redirects = settings.max_redirects
 
     url = href
     for _ in range(max_redirects + 1):
@@ -388,9 +390,13 @@ def _extract(archive: Path, dest: Path) -> None:
     Raises ``SourceError`` (``not-an-archive`` / ``too-large`` / ``zip-slip``).
     Nothing is written outside ``dest``.
     """
-    max_entries = _int_env("FAUN_SOURCE_MAX_ENTRIES", _DEFAULT_MAX_ENTRIES)
+    settings = get_settings()
+    max_entries = settings.max_entries
+    # The uncompressed cap is read through _int_env (default sourced from
+    # Settings) so the per-member streaming counter remains the load-bearing
+    # control even when an env override is set mid-process.
     max_uncompressed = _int_env(
-        "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", _DEFAULT_MAX_UNCOMPRESSED
+        "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", settings.max_uncompressed_bytes
     )
 
     if not zipfile.is_zipfile(archive):
@@ -410,7 +416,7 @@ def _extract(archive: Path, dest: Path) -> None:
         # write while streaming each member.
         declared = sum(info.file_size for info in infos)
         precheck_cap = _int_env(
-            "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", _DEFAULT_MAX_UNCOMPRESSED
+            "FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES", settings.max_uncompressed_bytes
         )
         if declared > precheck_cap:
             raise SourceError(
@@ -510,7 +516,7 @@ def resolve_source(src: str, workdir: Path, *, client: Any = None) -> Path:
 
     owns_client = client is None
     if owns_client:
-        timeout = _float_env("FAUN_SOURCE_TIMEOUT_S", _DEFAULT_TIMEOUT_S)
+        timeout = get_settings().timeout_s
         # follow_redirects=False: we follow + SSRF-validate each hop ourselves so
         # httpx never connects to an internal host on our behalf.
         client = httpx.Client(follow_redirects=False, timeout=timeout)

@@ -20,18 +20,21 @@ downmix) живёт здесь и тестируется TF-free через мо
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Protocol, Sequence, runtime_checkable
 
 import numpy as np
 
-try:
-    import soxr
+# Препроцессинг (downmix/resample/fit_window) живёт в faun.audio (ADR-0002).
+# Ре-экспортим под замороженными именами _downmix/_resample/_fit_window тем же
+# объектом — faun.training.dataset импортирует их отсюда (frozen контракт).
+from faun.audio import downmix as _downmix
+from faun.audio import fit_window as _fit_window
+from faun.audio import resample as _resample
 
-    _HAS_SOXR = True
-except ImportError:  # pragma: no cover - soxr в requirements-pipeline.txt
-    _HAS_SOXR = False
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "Embedder",
@@ -55,50 +58,6 @@ class Embedder(Protocol):
     def embed(self, waveform: np.ndarray, sr: int) -> np.ndarray:
         """Вернуть эмбеддинг [DIM] для ``waveform`` на частоте ``sr`` Гц."""
         ...
-
-
-# ---------------------------------------------------------------------------
-# Препроцессинг (общий для адаптеров, тестируется TF-free)
-# ---------------------------------------------------------------------------
-
-
-def _downmix(waveform: np.ndarray) -> np.ndarray:
-    """Stereo/multichannel -> mono float32 через среднее по каналам."""
-    waveform = np.asarray(waveform, dtype=np.float32)
-    if waveform.ndim == 1:
-        return waveform
-    if waveform.ndim != 2:
-        raise ValueError(f"ожидался 1-D или 2-D сигнал, получен ndim={waveform.ndim}")
-    # soundfile отдаёт (frames, channels); принимаем и (channels, frames).
-    channel_axis = 1 if waveform.shape[1] <= waveform.shape[0] else 0
-    return waveform.mean(axis=channel_axis).astype(np.float32)
-
-
-def _resample(mono: np.ndarray, sr: int, target_sr: int) -> np.ndarray:
-    """Resample mono-сигнала до ``target_sr`` (soxr; иначе линейный фолбэк)."""
-    if sr == target_sr:
-        return mono.astype(np.float32, copy=False)
-    if sr <= 0:
-        raise ValueError(f"частота должна быть положительной, получено {sr}")
-    if _HAS_SOXR:
-        return soxr.resample(mono, sr, target_sr).astype(np.float32)
-    # Фолбэк без soxr: линейная интерполяция (для тестов без soxr).
-    n_out = int(round(len(mono) * target_sr / sr))
-    if n_out <= 0:
-        return np.zeros(0, dtype=np.float32)
-    x_out = np.linspace(0.0, len(mono) - 1, n_out)
-    return np.interp(x_out, np.arange(len(mono)), mono).astype(np.float32)
-
-
-def _fit_window(mono: np.ndarray, win_samples: int) -> np.ndarray:
-    """Pad нулями справа или truncate до ровно ``win_samples`` сэмплов."""
-    if len(mono) == win_samples:
-        return mono.astype(np.float32, copy=False)
-    if len(mono) > win_samples:
-        return mono[:win_samples].astype(np.float32, copy=False)
-    out = np.zeros(win_samples, dtype=np.float32)
-    out[: len(mono)] = mono
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +154,17 @@ def embed_batch(
 def _embedder_dim(embedder: object) -> int:
     """Размерность эмбеддера: класс-атрибут ``DIM`` или инстанс-атрибут ``dim``.
 
-    Нужно для формы пустого батча; ``0`` если размерность недоступна.
+    Нужно для формы пустого батча; ``0`` если размерность недоступна (тогда
+    пишем warning — пустой батч получит форму ``(0, 0)``, что может скрыть
+    рассогласование размерностей выше по стеку).
     """
-    return int(getattr(embedder, "DIM", None) or getattr(embedder, "dim", 0))
+    dim = int(getattr(embedder, "DIM", None) or getattr(embedder, "dim", 0))
+    if dim == 0:
+        logger.warning(
+            "embedder %r exposes neither DIM nor dim; empty batch shape is (0, 0)",
+            type(embedder).__name__,
+        )
+    return dim
 
 
 @dataclass
