@@ -18,6 +18,9 @@ __pycache__/
 *.pfx
 sa-key.json
 *-sa-key.json
+# Local-only shareable notes that may carry credentials (e.g. Basic-Auth creds)
+*.local.md
+deploy/basic-auth.local.md
 
 # ML model weights
 *.keras
