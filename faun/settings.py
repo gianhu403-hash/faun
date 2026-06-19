@@ -18,16 +18,17 @@ non-positive numeric env var must NOT crash service boot. Such values fall back
 to the documented default and the misconfiguration is surfaced via a log
 warning rather than a traceback.
 
-NOTE on wiring status (read before trusting a value here): this module is the
-typed *home* for these knobs, but it is not yet the only *reader*. As of this
-iteration ``faun.sources`` still reads the ``FAUN_SOURCE_*`` vars directly (with
-the SAME defaults mirrored below — they are the enforced ceilings), and the
-model adapters still read ``PERCH_V2_MODEL_PATH`` / ``PERCH_MODEL_PATH`` /
-``YAMNET_PROBE_PATH`` directly. The corresponding ``Settings`` fields mirror
-those env vars and are the migration target; changing a ``Settings`` field in
-code does NOT yet change adapter/sources behaviour until that wiring lands.
-``jobs_root``, ``classifier`` and ``log_json`` ARE consumed via ``get_settings``
-(faun.api).
+WIRING (current): ``get_settings()`` is now the actual reader across the
+service. ``faun.api`` consumes ``jobs_root`` / ``classifier`` / ``log_json`` /
+``basic_user`` / ``basic_pass``; ``faun.sources`` reads ``timeout_s`` /
+``max_bytes`` / ``max_redirects`` / ``max_entries`` / ``max_uncompressed_bytes``;
+``faun.health`` reads ``jobs_root``; the model adapters resolve their paths via
+``perch_model_path`` / ``perch_v2_model_path`` / ``yamnet_probe_path`` (an
+explicit constructor argument still wins). One deliberate exception remains:
+``faun.sources`` reads the uncompressed-cap through its ``_int_env`` indirection
+(whose default is sourced from ``max_uncompressed_bytes``) so a direct
+``FAUN_SOURCE_MAX_UNCOMPRESSED_BYTES`` env override still wins at call time and
+the zip-bomb enforcement test keeps its patch point.
 
 Defaults (match the values faun.sources actually enforces):
     jobs_root                 ``./jobs``      (FAUN_JOBS_ROOT)         [WIRED]
@@ -183,6 +184,11 @@ class Settings:
     perch_model_path: str | None = None
     yamnet_probe_path: str | None = None
 
+    # HTTP Basic Auth (env-gated). Both must be set to enable the site-wide
+    # login gate in faun.api; either unset -> auth disabled (default-open).
+    basic_user: str | None = None
+    basic_pass: str | None = None
+
     # Observability.
     log_json: bool = DEFAULT_LOG_JSON
 
@@ -215,6 +221,8 @@ class Settings:
             perch_v2_model_path=_env_path_opt("PERCH_V2_MODEL_PATH"),
             perch_model_path=_env_path_opt("PERCH_MODEL_PATH"),
             yamnet_probe_path=_env_path_opt("YAMNET_PROBE_PATH"),
+            basic_user=_env_path_opt("FAUN_BASIC_USER"),
+            basic_pass=_env_path_opt("FAUN_BASIC_PASS"),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
         )
 

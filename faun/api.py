@@ -17,16 +17,19 @@ error) alongside the top-level ``job_id``/``status``.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import fcntl
+import hmac
 import logging
 import re
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from faun import jobs
 from faun.obs import setup_logging, with_job_context
@@ -163,12 +166,12 @@ def run_pipeline(
 
     Tests patch this function — they do NOT call the real chain.
     """
-    import numpy as np
-    import soundfile as sf
-    import soxr
+    import shutil
 
-    from faun import ingest, ordering, output, segmentation
-    from faun.detections import Detection, Label, write_detections, STATUS_PSEUDO
+    import soundfile as sf
+
+    from faun import ingest, ordering, output, pipeline as pl
+    from faun.detections import Label, write_detections, STATUS_PSEUDO
     from faun.sources import resolve_source, source_provenance
 
     if classifier is None:
@@ -180,77 +183,76 @@ def run_pipeline(
     results_path = job_dir / RESULTS_CSV
     segments_dir = job_dir / SEGMENTS_DIR
 
-    # Resolve the source to a local scannable dir. NEVER Path() a URL: a local
-    # path passes through unchanged; an http(s) zip / Yandex.Disk share is
-    # downloaded + safely extracted under job_dir/_source/ (the P0 fix). A
-    # SourceError here propagates to _execute_job -> job status="error".
-    scan_dir = resolve_source(source_path, job_dir)
-    # ingest: scan(path) -> Manifest of AudioFileEntry; stable trap/time order
-    manifest = ordering.sort_entries(ingest.scan(scan_dir))
+    try:
+        # Resolve the source to a local scannable dir. NEVER Path() a URL: a local
+        # path passes through unchanged; an http(s) zip / Yandex.Disk share is
+        # downloaded + safely extracted under job_dir/_source/ (the P0 fix). A
+        # SourceError here propagates to _execute_job -> job status="error".
+        scan_dir = resolve_source(source_path, job_dir)
+        # ingest: scan(path) -> Manifest of AudioFileEntry; stable trap/time order
+        manifest = ordering.sort_entries(ingest.scan(scan_dir))
 
-    # Sidecar provenance: only claim a trap_id/coords when the batch is
-    # single-trap; a mixed batch gets "multi" and no coordinates (honest
-    # rather than first-entry's identity stamped onto everyone's rows).
-    trap_ids = {e.trap_id for e in manifest.entries}
-    first = manifest.entries[0] if manifest.entries else None
-    single = len(trap_ids) == 1 and first is not None
-    meta = output.TrapMeta(
-        trap_id=(first.trap_id if single else ("multi" if trap_ids else "")),
-        lat=lat if lat is not None else (first.lat if single else None),
-        lon=lon if lon is not None else (first.lon if single else None),
-        files=[e.path.name for e in manifest.entries],
-        extra={"source_provenance": source_provenance(source_path)},
-    )
+        # Sidecar provenance: only claim a trap_id/coords when the batch is
+        # single-trap; a mixed batch gets "multi" and no coordinates (honest
+        # rather than first-entry's identity stamped onto everyone's rows).
+        trap_ids = {e.trap_id for e in manifest.entries}
+        first = manifest.entries[0] if manifest.entries else None
+        single = len(trap_ids) == 1 and first is not None
+        meta = output.TrapMeta(
+            trap_id=(first.trap_id if single else ("multi" if trap_ids else "")),
+            lat=lat if lat is not None else (first.lat if single else None),
+            lon=lon if lon is not None else (first.lon if single else None),
+            files=[e.path.name for e in manifest.entries],
+            extra={"source_provenance": source_provenance(source_path)},
+        )
 
-    extractor = segmentation.SegmentExtractor()
-    detections: list[Detection] = []
-    with output.CsvWriter().open(results_path, meta=meta) as writer:
-        for entry in manifest.entries:
-            waveform, orig_sr = sf.read(entry.path, dtype="float64", always_2d=False)
-            for seg in extractor.extract(waveform, orig_sr):
-                # Cut the clip from the ORIGINAL waveform at the ORIGINAL sr,
-                # preserving channels/dtype, then build a 16 kHz mono COPY for
-                # the classifier (real adapters expect a waveform array).
-                start = round(seg.start_s * orig_sr)
-                end = round((seg.start_s + seg.duration_s) * orig_sr)
-                clip = waveform[start:end]
+        # Read at float64 for clip fidelity; the classifier gets a 16 kHz mono
+        # COPY (faun.pipeline.to_classifier_input) while the on-disk clip keeps
+        # the ORIGINAL sr + channels.
+        def _read(path):
+            return sf.read(path, dtype="float64", always_2d=False)
 
-                mono = clip if clip.ndim == 1 else clip.mean(axis=1)
-                clip_16k = soxr.resample(
-                    np.asarray(mono, dtype=np.float32), orig_sr, CLASSIFY_SR
-                )
-                predictions = classifier.classify(clip_16k, CLASSIFY_SR)
+        def _build_labels(clip_16k):
+            return [
+                Label.from_prediction(pred, source=source, status=STATUS_PSEUDO)
+                for pred in classifier.classify(clip_16k, pl.CLASSIFY_SR)
+            ]
 
-                # Build the Detection BEFORE writing the clip so the on-disk
-                # filename matches detection.segment_path's basename.
-                det = Detection.new(
-                    trap_id=entry.trap_id,
-                    source_file=entry.path.name,
-                    segment=seg,
-                    labels=[
-                        Label.from_prediction(pred, source=source, status=STATUS_PSEUDO)
-                        for pred in predictions
-                    ],
-                )
+        # run_batch yields one (Detection, clip) at a time, so we write each clip
+        # + its CSV rows and keep only ONE clip live (the real ingest can be tens
+        # of GB). Detections (metadata only) accumulate for detections.jsonl.
+        detections = []
+        with output.CsvWriter().open(results_path, meta=meta) as writer:
+            for res in pl.run_batch(
+                manifest.entries, read_waveform=_read, build_labels=_build_labels
+            ):
+                det = res.detection
+                # Write the clip from the ORIGINAL waveform at the ORIGINAL sr;
+                # det.segment_path's basename matches the file we write here.
                 segments_dir.mkdir(parents=True, exist_ok=True)
-                sf.write(job_dir / det.segment_path, clip, orig_sr)
+                sf.write(job_dir / det.segment_path, res.clip, res.sr)
                 detections.append(det)
-
-                for pred in predictions:
+                for lbl in det.labels:
                     writer.write_row(
                         {
-                            "track": entry.trap_id,
-                            "start_sec": seg.start_s,
-                            "duration_sec": seg.duration_s,
-                            "species": pred.species,
-                            "probability": pred.probability,
+                            "track": det.trap_id,
+                            "start_sec": det.segment.start_s,
+                            "duration_sec": det.segment.duration_s,
+                            "species": lbl.species,
+                            "probability": lbl.probability,
                         }
                     )
 
-    # Always write detections.jsonl — empty (zero lines) for silent input.
-    write_detections(job_dir / DETECTIONS_JSONL, detections)
+        # Always write detections.jsonl — empty (zero lines) for silent input.
+        write_detections(job_dir / DETECTIONS_JSONL, detections)
 
-    return results_path
+        return results_path
+    finally:
+        # B1 disk-leak: drop the downloaded/extracted REMOTE source tree on exit
+        # (success OR error) — its files were only needed during segmentation
+        # above. resolve_source creates job_dir/_source ONLY for a remote source;
+        # a local pass-through source is Path(src) OUTSIDE job_dir, never touched.
+        shutil.rmtree(job_dir / "_source", ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -289,8 +291,10 @@ def _execute_job(
 class JobRequest(BaseModel):
     source_path: Optional[str] = None
     url: Optional[str] = None
-    lat: Optional[float] = None
-    lon: Optional[float] = None
+    # WGS84 bounds; the constraints also reject NaN/Inf (a bound check on a
+    # non-finite float fails) -> 422 instead of poisoning the sidecar coords.
+    lat: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
+    lon: Optional[float] = Field(default=None, ge=-180.0, le=180.0)
 
     @model_validator(mode="after")
     def _require_source(self) -> "JobRequest":
@@ -304,8 +308,8 @@ class JobRequest(BaseModel):
 
 
 class LabelRequest(BaseModel):
-    species: str
-    source: str = "operator:ranger"
+    species: str = Field(min_length=1, max_length=200)
+    source: str = Field(default="operator:ranger", max_length=100)
     status: Optional[str] = None  # default resolved to STATUS_CORRECTED at use
 
 
@@ -317,6 +321,58 @@ app = FastAPI(title="Faun pipeline API")
 
 # Structured logging configured once at import time (idempotent); JSON by default.
 setup_logging(json=get_settings().log_json)
+
+
+# ---------------------------------------------------------------------------
+# HTTP Basic Auth (env-gated; default-OPEN so CI / local / tests are unchanged)
+# ---------------------------------------------------------------------------
+
+#: Paths served WITHOUT auth even when Basic Auth is enabled. /healthz must stay
+#: open for the container HEALTHCHECK / external liveness probe.
+_AUTH_OPEN_PATHS = frozenset({"/healthz"})
+
+
+@app.middleware("http")
+async def _basic_auth_mw(request: Request, call_next):
+    """Site-wide HTTP Basic Auth gate (the simple browser login the team shares).
+
+    Enabled ONLY when BOTH ``FAUN_BASIC_USER`` and ``FAUN_BASIC_PASS`` are set
+    (via faun.settings); otherwise every request passes through unchanged
+    (default-open — CI, local dev and the existing test-suite see no auth). When
+    enabled, every path EXCEPT ``/healthz`` requires valid credentials: the SPA
+    pages, the POST routes and the ``/static`` mount alike, so a browser shows
+    the native login dialog on first visit. Credentials are checked with
+    ``hmac.compare_digest`` (constant-time); a miss returns 401 +
+    ``WWW-Authenticate: Basic`` so the browser re-prompts.
+    """
+    settings = get_settings()
+    user, password = settings.basic_user, settings.basic_pass
+    if not user or not password:
+        return await call_next(request)  # auth disabled -> open
+    if request.url.path in _AUTH_OPEN_PATHS:
+        return await call_next(request)
+
+    header = request.headers.get("Authorization", "")
+    if header[:6].lower() == "basic ":
+        try:
+            raw = base64.b64decode(header[6:], validate=True).decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            raw = ""
+        req_user, sep, req_pass = raw.partition(":")
+        # Evaluate BOTH halves (no boolean short-circuit) for constant-time-ish
+        # comparison; encode to bytes so non-ASCII creds don't raise.
+        ok_user = hmac.compare_digest(req_user.encode("utf-8"), user.encode("utf-8"))
+        ok_pass = hmac.compare_digest(
+            req_pass.encode("utf-8"), password.encode("utf-8")
+        )
+        if sep and ok_user and ok_pass:
+            return await call_next(request)
+
+    return Response(
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="Faun", charset="UTF-8"'},
+    )
+
 
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")

@@ -40,7 +40,7 @@ from faun.detections import (
 )
 from faun.embeddings import Embedder, EmbeddingCache, _embedder_dim, embed_batch
 from faun.ingest import scan
-from faun.segmentation import SegmentExtractor
+from faun.pipeline import run_batch
 
 __all__ = ["batch_label", "training_candidates"]
 
@@ -69,29 +69,6 @@ def _read_clip(path: Path) -> tuple[np.ndarray, int]:
 
     waveform, sr = sf.read(str(path))
     return np.asarray(waveform, dtype=np.float32), int(sr)
-
-
-def _slice_segment(waveform: np.ndarray, sr: int, segment) -> np.ndarray:
-    """Вырезать клип сегмента из исходного сигнала на исходной sr."""
-    start = max(0, int(round(segment.start_s * sr)))
-    end = min(len(waveform), int(round(segment.end_s * sr)))
-    return waveform[start:end]
-
-
-def _to_classifier_input(clip: np.ndarray, sr: int) -> np.ndarray:
-    """Downmix mono + resample до 16 кГц — вход адаптеров (как в run_pipeline).
-
-    Контракт ``SpeciesClassifier.classify`` принимает waveform-массив на 16 кГц,
-    а НЕ объект ``Segment``; реальные адаптеры (Perch/BirdNET/YAMNet) делают
-    ``np.asarray(segment)`` — поэтому сюда нельзя передавать сам Segment.
-    """
-    import soxr
-
-    mono = clip if clip.ndim == 1 else clip.mean(axis=1)
-    mono = np.asarray(mono, dtype=np.float32)
-    if sr == CLASSIFY_SR:
-        return mono
-    return soxr.resample(mono, sr, CLASSIFY_SR)
 
 
 def _consensus_species(detection: Detection) -> set[str]:
@@ -140,44 +117,38 @@ def batch_label(
             }
     """
     out_jsonl = Path(out_jsonl)
-    extractor = SegmentExtractor()
 
-    detections: list[Detection] = []
     counts: dict[str, int] = {name: 0 for name in models}
-    # Клипы (waveform, sr на исходной частоте), выровненные по строкам с
-    # ``detections`` — собираются в ЕДИНСТВЕННОМ проходе для опц. эмбеддинга.
-    clips: list[tuple[np.ndarray, int]] = []
+
+    def _build_labels(classifier_input: np.ndarray) -> list[Label]:
+        """Map a 16 kHz mono clip through every model -> pseudo-labels."""
+        labels: list[Label] = []
+        for name, model in models.items():
+            source = _model_source(name)
+            predictions: list[Prediction] = model.classify(
+                classifier_input, CLASSIFY_SR
+            )
+            for pred in predictions:
+                labels.append(Label.from_prediction(pred, source, status=STATUS_PSEUDO))
+                counts[name] += 1
+        return labels
 
     from faun.sources import resolve_source
 
     # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
     scan_dir = resolve_source(str(archive), out_jsonl.parent)
     manifest = scan(scan_dir)
-    for entry in manifest.entries:
-        waveform, sr = _read_clip(entry.path)
-        for segment in extractor.extract(waveform, sr):
-            clip = _slice_segment(waveform, sr, segment)
-            classifier_input = _to_classifier_input(clip, sr)
-            labels: list[Label] = []
-            for name, model in models.items():
-                source = _model_source(name)
-                predictions: list[Prediction] = model.classify(
-                    classifier_input, CLASSIFY_SR
-                )
-                for pred in predictions:
-                    labels.append(
-                        Label.from_prediction(pred, source, status=STATUS_PSEUDO)
-                    )
-                    counts[name] += 1
-            detections.append(
-                Detection.new(
-                    trap_id=entry.trap_id,
-                    source_file=entry.path.name,
-                    segment=segment,
-                    labels=labels,
-                )
-            )
-            clips.append((clip, sr))
+
+    # Single shared executor pass (faun.pipeline.run_batch): detections + their
+    # original-sr clips (waveform, sr) row-aligned for the optional embeddings
+    # export. Reading at float32 here keeps batch_label's prior dtype behaviour.
+    results = list(
+        run_batch(
+            manifest.entries, read_waveform=_read_clip, build_labels=_build_labels
+        )
+    )
+    detections: list[Detection] = [r.detection for r in results]
+    clips: list[tuple[np.ndarray, int]] = [(r.clip, r.sr) for r in results]
 
     write_detections(out_jsonl, detections)
 
