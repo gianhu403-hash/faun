@@ -60,6 +60,20 @@ PERCH_V2_WINDOW_SAMPLES = PERCH_V2_SR * PERCH_V2_WINDOW_S  # 160_000
 #: Peak amplitude Perch 2 preprocessing normalizes to.
 PERCH_V2_PEAK = 0.25
 
+#: Class-label asset shipped inside the SavedModel. ``labels.csv`` holds the
+#: scientific names aligned 1:1 with the ``label`` logits; its sibling
+#: ``perch_v2_ebird_classes.csv`` holds eBird codes for the same rows (we surface
+#: scientific names). Verified against the real Kaggle ``perch_v2_cpu/1`` assets
+#: (2026-06-19): 14796 lines = ONE taxonomy/namespace header (``inat2024_fsd50k``,
+#: NOT a class) + 14795 class rows. ``_load_labels`` drops that header line.
+PERCH_V2_LABELS_FILE = "labels.csv"
+
+#: Known leading-header tokens in Perch 2 label assets (the first line names the
+#: taxonomy/namespace, NOT a class). Real class names are binomial ("Genus
+#: species"), so a no-space first token is also treated as a header — but the
+#: load-bearing guard is the len(labels)==len(logits) cross-check in ``classify``.
+_LABELS_HEADER_SENTINELS = frozenset({"inat2024_fsd50k", "ebird2021"})
+
 #: Kaggle model handles. GPU handle is the default; the *_cpu variant is the
 #: cluster CPU-only build (TF without CUDA).
 PERCH_V2_HANDLE_GPU = "google/bird-vocalization-classifier/tensorFlow2/perch_v2/2"
@@ -127,6 +141,9 @@ class Perch2Adapter:
         self.top_k = top_k
         self.cpu = cpu
         self._model = None
+        # Whether the assets-label load has been attempted (caches a miss so we
+        # don't re-stat the filesystem on every classify call).
+        self._labels_loaded = False
 
     def _resolve_path(self) -> str:
         """Resolve the SavedModel directory, downloading from Kaggle if needed.
@@ -220,14 +237,103 @@ class Perch2Adapter:
         _logits, embedding = self._infer(waveform, sr)
         return embedding[0] if embedding.ndim > 1 else embedding
 
+    def _load_labels(self) -> list[str] | None:
+        """Lazily load scientific-name class labels from the SavedModel assets.
+
+        Reads ``<model_path>/assets/labels.csv`` once and caches the result. The
+        file's FIRST line is a taxonomy/namespace header (e.g. ``inat2024_fsd50k``)
+        — NOT a class — so it is dropped; the remaining rows are scientific names
+        aligned 1:1 with the ``label`` logits (empirically 14795 classes).
+
+        An explicit ``labels`` constructor argument always wins. When the assets
+        file is missing or unreadable this logs a warning and returns ``None`` so
+        ``classify`` falls back to ``species_<i>`` rather than crashing. Pure file
+        I/O — never imports TensorFlow.
+
+        Resolution relies on ``self.model_path`` being set; in the kagglehub
+        path that happens during ``_infer`` (``_load`` -> ``_resolve_path``), so
+        ``classify`` calls this only AFTER inference has resolved the path.
+        """
+        if self.labels is not None:
+            return self.labels
+        if self._labels_loaded:
+            return self.labels  # cached miss (None) — don't re-stat each call
+        self._labels_loaded = True
+        if not self.model_path:
+            return None
+        assets = Path(self.model_path) / "assets" / PERCH_V2_LABELS_FILE
+        if not assets.is_file():
+            logger.warning(
+                "Perch 2 labels file not found at %s; predictions will be named "
+                "species_<i>",
+                assets,
+            )
+            return None
+        try:
+            text = assets.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "failed to read Perch 2 labels %s: %s; using species_<i>",
+                assets,
+                exc,
+            )
+            return None
+        # One value per line; tolerate an accidental extra column by taking the
+        # first comma-field. Drop blank lines.
+        rows = [ln.split(",")[0].strip() for ln in text.splitlines() if ln.strip()]
+        if not rows:
+            logger.warning("Perch 2 labels file %s is empty; using species_<i>", assets)
+            return None
+        # Drop a leading taxonomy/namespace header ONLY when row 0 looks like a
+        # header (a known sentinel, or a single token with no internal space —
+        # real class names are binomial "Genus species"). Otherwise keep every
+        # row. This avoids silently dropping a real class if a future asset
+        # layout has no header line. The decisive correctness guard is the
+        # len(labels) == len(logits) cross-check in ``classify``.
+        first = rows[0]
+        if first in _LABELS_HEADER_SENTINELS or " " not in first:
+            rows = rows[1:]
+        if not rows:
+            logger.warning(
+                "Perch 2 labels file %s has no class rows; using species_<i>", assets
+            )
+            return None
+        self.labels = rows
+        logger.info(
+            "loaded %d Perch 2 species labels from %s", len(self.labels), assets
+        )
+        return self.labels
+
     def classify(self, segment: np.ndarray, sr: int) -> list[Prediction]:
         """Return ranked species predictions for ``segment``.
+
+        Predictions are named with the model's real scientific-name labels
+        (``assets/labels.csv``); if those assets are unavailable the names fall
+        back to ``species_<i>`` (never a crash).
 
         Raises:
             RuntimeError: if TensorFlow is unavailable at call time.
         """
         logits, _embedding = self._infer(segment, sr)
         scores = logits[0] if logits.ndim > 1 else logits
-        labels = self.labels or [f"species_{i}" for i in range(len(scores))]
+        labels = self._load_labels()
+        # Fail-safe against a silent off-by-one: the label list MUST be 1:1 with
+        # the logits. If a future asset layout breaks that (e.g. an un-dropped
+        # header, or a different model variant), refuse to mislabel — fall back
+        # to species_<i> rather than reporting every bird as its neighbour.
+        if labels is not None and len(labels) != len(scores):
+            logger.warning(
+                "Perch 2 label count (%d) != logit count (%d); naming predictions "
+                "species_<i> to avoid an off-by-one mislabel",
+                len(labels),
+                len(scores),
+            )
+            labels = None
         order = np.argsort(scores)[::-1][: self.top_k]
-        return [Prediction(labels[i], float(scores[i])) for i in order]
+
+        def _name(i: int) -> str:
+            if labels is not None and i < len(labels):
+                return labels[i]
+            return f"species_{i}"
+
+        return [Prediction(_name(int(i)), float(scores[i])) for i in order]

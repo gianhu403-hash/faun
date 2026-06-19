@@ -29,6 +29,7 @@ from faun.segmentation import Segment
 __all__ = [
     "SOURCE_PERCH",
     "SOURCE_PERCH_V2",
+    "SOURCE_PERCH_V2_PROBE",
     "SOURCE_BIRDNET",
     "SOURCE_YAMNET_PROBE",
     "SOURCE_STUB",
@@ -48,6 +49,10 @@ __all__ = [
 # --- Label provenance (source) -------------------------------------------------
 SOURCE_PERCH = "model:perch"
 SOURCE_PERCH_V2 = "model:perch-v2"
+#: Perch 2 embeddings + a trained species probe head (PerchProbeAdapter). Kept
+#: distinct from SOURCE_PERCH_V2 (zero-shot logits) so a detection records which
+#: Perch 2 head produced it.
+SOURCE_PERCH_V2_PROBE = "model:perch-v2-probe"
 SOURCE_BIRDNET = "model:birdnet"
 SOURCE_YAMNET_PROBE = "model:yamnet-probe"
 SOURCE_STUB = "model:stub"

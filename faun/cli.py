@@ -27,7 +27,12 @@ def main(argv: list[str] | None = None) -> int:
         "retrain", help="retrain the species probe from human labels"
     )
     retrain.add_argument("--labels", required=True, help="CSV of reviewed labels")
-    retrain.add_argument("--model", default="yamnet", choices=["yamnet"])
+    retrain.add_argument(
+        "--model",
+        default="yamnet",
+        choices=["yamnet", "perch", "perch-v2"],
+        help="embedding backbone for the probe (default: yamnet)",
+    )
     retrain.add_argument("--out", required=True, help="output probe path (.pkl)")
     retrain.add_argument(
         "--audio-dir",
@@ -40,6 +45,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     export.add_argument("--job", required=True, help="job dir with detections.jsonl")
     export.add_argument("--out", required=True, help="output ZIP path")
+
+    exlabels = sub.add_parser(
+        "export-labels",
+        help="export human ground-truth labels from a job -> retrain CSV",
+    )
+    exlabels.add_argument("--job", required=True, help="job dir with detections.jsonl")
+    exlabels.add_argument(
+        "--out", required=True, help="output labels CSV (feeds `faun retrain`)"
+    )
 
     blabel = sub.add_parser(
         "batch-label",
@@ -160,12 +174,10 @@ def main(argv: list[str] | None = None) -> int:
 
         audio_dir = Path(args.audio_dir) if args.audio_dir else labels_path.parent
 
-        if args.model == "yamnet":
-            from faun.classification import YAMNetAdapter
-
-            model = YAMNetAdapter()
-        else:  # pragma: no cover - argparse choices already constrain this
-            raise SystemExit(f"unknown model: {args.model}")
+        # retrain_from_labels is embedder-agnostic — it only calls model.embed.
+        # All three choices (yamnet/perch/perch-v2) expose embed(); argparse
+        # choices already constrain the value to an embed-capable adapter.
+        model = _build_classifier_by_name(args.model)
 
         metrics = retraining.retrain_from_labels(
             labels, audio_dir=audio_dir, model=model, out_path=Path(args.out)
@@ -175,6 +187,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "export-clips":
         return _export_clips(Path(args.job), Path(args.out))
+
+    if args.command == "export-labels":
+        return _export_labels(Path(args.job), Path(args.out))
 
     if args.command == "batch-label":
         return _batch_label(args)
@@ -254,6 +269,78 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
         zf.writestr("clips_index.csv", index.getvalue())
 
     print(out_path)
+    return 0
+
+
+def _export_labels(job_dir: Path, out_path: Path) -> int:
+    """Export a job's HUMAN ground-truth labels to a retrain-ready CSV.
+
+    Reads ``<job_dir>/detections.jsonl`` and, for each detection, keeps only the
+    labels that pass the canonical ground-truth gate
+    (:func:`faun.detections.is_ground_truth` — human source expert/ranger AND
+    status confirmed/corrected; model pseudo-labels are dropped). Each surviving
+    label becomes one CSV row carrying the columns ``faun retrain`` consumes
+    (``species``/``source``/``status``/``segment_path``). This closes the loop so
+    operator review labels feed retraining with no code change.
+
+    Importing ``faun.detections`` here is deliberate: the ground-truth predicate
+    must stay single-homed (unlike ``export-clips`` which is provenance-agnostic).
+    The module is stdlib-light (no TF).
+    """
+    import csv
+    import json
+
+    from faun.detections import is_ground_truth
+
+    jsonl = job_dir / "detections.jsonl"
+    fieldnames = [
+        "species",
+        "source",
+        "status",
+        "segment_path",
+        "source_file",
+        "start_sec",
+        "duration_sec",
+        "detection_id",
+    ]
+    rows: list[dict] = []
+    with open(jsonl, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            det = json.loads(line)
+            seg = det.get("segment") or {}
+            # Emit an ABSOLUTE clip path: detections.jsonl stores segment_path
+            # job-relative ("segments/<id>.wav"), but `faun retrain` resolves
+            # clips against its --audio-dir (default = the labels CSV's parent).
+            # Absoluting it here makes the exported CSV feed retrain from ANY
+            # location (audio_dir / abs == abs), truly closing the review loop.
+            seg_rel = det.get("segment_path", "")
+            seg_abs = str((job_dir / seg_rel).resolve()) if seg_rel else ""
+            for lbl in det.get("labels") or []:
+                if not is_ground_truth(lbl):
+                    continue
+                rows.append(
+                    {
+                        "species": lbl.get("species", ""),
+                        "source": lbl.get("source", ""),
+                        "status": lbl.get("status", ""),
+                        "segment_path": seg_abs,
+                        "source_file": det.get("source_file", ""),
+                        "start_sec": seg.get("start_s", ""),
+                        "duration_sec": seg.get("duration_s", ""),
+                        "detection_id": det.get("detection_id", ""),
+                    }
+                )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"{out_path} ({len(rows)} ground-truth label(s))")
     return 0
 
 

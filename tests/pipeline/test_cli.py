@@ -201,6 +201,187 @@ def test_finetune_dispatch_forwards_args(tmp_path, monkeypatch):
     assert seen["epochs"] == 1
 
 
+def test_retrain_model_routes_to_embedder(tmp_path, monkeypatch):
+    """`retrain --model perch-v2` builds the Perch 2 embedder (VC), not yamnet."""
+    import faun.cli as cli
+    from faun import retraining
+
+    labels_csv = tmp_path / "labels.csv"
+    labels_csv.write_text(
+        "species,source,status,segment_path\n"
+        "Turdus merula,expert:ornithologist,confirmed,segments/a.wav\n",
+        encoding="utf-8",
+    )
+
+    seen = {}
+    sentinel = object()
+
+    def fake_build(name):
+        seen["name"] = name
+        return sentinel
+
+    def fake_retrain(labels, audio_dir, model, out_path):
+        seen["model"] = model
+        return {"out_path": str(out_path), "n": len(labels)}
+
+    monkeypatch.setattr(cli, "_build_classifier_by_name", fake_build)
+    monkeypatch.setattr(retraining, "retrain_from_labels", fake_retrain)
+
+    rc = main(
+        [
+            "retrain",
+            "--model",
+            "perch-v2",
+            "--labels",
+            str(labels_csv),
+            "--out",
+            str(tmp_path / "probe.pkl"),
+        ]
+    )
+    assert rc == 0
+    assert seen["name"] == "perch-v2"
+    assert seen["model"] is sentinel
+
+
+def test_export_labels_keeps_only_ground_truth(tmp_path, capsys):
+    """`export-labels` (VE) emits ONLY human confirmed/corrected labels as a retrain CSV."""
+    import csv
+    import json
+
+    job = tmp_path / "job"
+    job.mkdir()
+    # det 1: a model pseudo-label (must be dropped) + a human corrected label (kept).
+    # det 2: only a model pseudo-label (entirely dropped).
+    det1 = {
+        "detection_id": "det1",
+        "trap_id": "A1",
+        "source_file": "rec1.wav",
+        "segment": {"start_s": 1.0, "duration_s": 0.5},
+        "segment_path": "segments/det1.wav",
+        "labels": [
+            {
+                "species": "Turdus merula",
+                "probability": 0.9,
+                "source": "model:perch-v2",
+                "status": "pseudo",
+                "ts": "t",
+            },
+            {
+                "species": "Fringilla coelebs",
+                "probability": None,
+                "source": "operator:ranger",
+                "status": "corrected",
+                "ts": "t",
+            },
+        ],
+    }
+    det2 = {
+        "detection_id": "det2",
+        "trap_id": "A1",
+        "source_file": "rec2.wav",
+        "segment": {"start_s": 2.0, "duration_s": 0.5},
+        "segment_path": "segments/det2.wav",
+        "labels": [
+            {
+                "species": "Parus major",
+                "probability": 0.8,
+                "source": "model:stub",
+                "status": "pseudo",
+                "ts": "t",
+            },
+        ],
+    }
+    (job / "detections.jsonl").write_text(
+        json.dumps(det1) + "\n" + json.dumps(det2) + "\n", encoding="utf-8"
+    )
+
+    out = tmp_path / "labels.csv"
+    rc = main(["export-labels", "--job", str(job), "--out", str(out)])
+    assert rc == 0
+    assert "1 ground-truth label(s)" in capsys.readouterr().out
+
+    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["species"] == "Fringilla coelebs"
+    assert row["source"] == "operator:ranger"
+    assert row["status"] == "corrected"
+    # segment_path is ABSOLUTE so the CSV feeds `faun retrain` from any location.
+    assert Path(row["segment_path"]).is_absolute()
+    assert row["segment_path"].endswith("segments/det1.wav")
+    # Columns must match what `faun retrain` consumes.
+    assert {"species", "source", "status", "segment_path"} <= set(row.keys())
+
+
+def test_export_labels_then_retrain_resolves_clips(tmp_path):
+    """End-to-end: export-labels -> retrain resolves the exported clips (closed loop).
+
+    The exported CSV lives in a DIFFERENT directory than the job, proving the
+    absolute segment_path lets retrain resolve clips regardless of --audio-dir.
+    """
+    import csv
+    import json
+
+    import numpy as np
+    import soundfile as sf
+
+    from faun import retraining
+
+    job = tmp_path / "job"
+    (job / "segments").mkdir(parents=True)
+    dets = []
+    for sp, did in [("Turdus merula", "d0"), ("Fringilla coelebs", "d1")]:
+        sf.write(
+            job / "segments" / f"{did}.wav", np.zeros(16000, dtype=np.float32), 16000
+        )
+        dets.append(
+            {
+                "detection_id": did,
+                "trap_id": "A1",
+                "source_file": "r.wav",
+                "segment": {"start_s": 0.0, "duration_s": 1.0},
+                "segment_path": f"segments/{did}.wav",
+                "labels": [
+                    {
+                        "species": sp,
+                        "probability": None,
+                        "source": "operator:ranger",
+                        "status": "corrected",
+                        "ts": "t",
+                    }
+                ],
+            }
+        )
+    (job / "detections.jsonl").write_text(
+        "\n".join(json.dumps(d) for d in dets) + "\n", encoding="utf-8"
+    )
+
+    # Export to a directory UNRELATED to the job (tests absolute-path resolution).
+    csv_out = tmp_path / "elsewhere" / "labels.csv"
+    assert main(["export-labels", "--job", str(job), "--out", str(csv_out)]) == 0
+    rows = list(csv.DictReader(csv_out.open(encoding="utf-8")))
+    assert len(rows) == 2
+    assert all(Path(r["segment_path"]).is_absolute() for r in rows)
+
+    class _FakeModel:
+        def __init__(self):
+            self.n = 0
+
+        def embed(self, wav, sr):
+            self.n += 1
+            return np.full(8, float(self.n), dtype=np.float32)
+
+    # audio_dir intentionally unrelated; the absolute segment_path must resolve.
+    metrics = retraining.retrain_from_labels(
+        rows,
+        audio_dir=tmp_path / "unrelated",
+        model=_FakeModel(),
+        out_path=tmp_path / "probe.pkl",
+    )
+    assert metrics["n"] == 2  # both clips resolved + embedded (loop is closed)
+    assert "out_path" in metrics
+
+
 def test_process_url_passthrough_no_path_mangle(monkeypatch):
     """`process <url>`: the URL reaches run_pipeline verbatim (// intact); job_dir isolated, not cwd."""
     seen = {}

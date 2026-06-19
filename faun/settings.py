@@ -42,6 +42,7 @@ Defaults (match the values faun.sources actually enforces):
     perch_v2_model_path       ``None``        (PERCH_V2_MODEL_PATH)
     perch_model_path          ``None``        (PERCH_MODEL_PATH)
     yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
+    perch_v2_probe_path       ``None``        (PERCH_V2_PROBE_PATH)
 """
 
 from __future__ import annotations
@@ -195,6 +196,9 @@ class Settings:
     perch_v2_model_path: str | None = None
     perch_model_path: str | None = None
     yamnet_probe_path: str | None = None
+    # Trained species probe over Perch 2 embeddings (PerchProbeAdapter). Like
+    # yamnet_probe_path: an operator-supplied local pickle, never network input.
+    perch_v2_probe_path: str | None = None
 
     # HTTP Basic Auth (env-gated). Both must be set to enable the site-wide
     # login gate in faun.api; either unset -> auth disabled (default-open).
@@ -233,6 +237,7 @@ class Settings:
             perch_v2_model_path=_env_path_opt("PERCH_V2_MODEL_PATH"),
             perch_model_path=_env_path_opt("PERCH_MODEL_PATH"),
             yamnet_probe_path=_env_path_opt("YAMNET_PROBE_PATH"),
+            perch_v2_probe_path=_env_path_opt("PERCH_V2_PROBE_PATH"),
             basic_user=_env_secret_opt("FAUN_BASIC_USER"),
             basic_pass=_env_secret_opt("FAUN_BASIC_PASS"),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),

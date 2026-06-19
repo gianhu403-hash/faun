@@ -21,6 +21,7 @@ __all__ = [
     "YAMNetAdapter",
     "PerchAdapter",
     "Perch2Adapter",
+    "PerchProbeAdapter",
 ]
 
 # Lazy adapter re-exports (PEP 562). Concrete adapters live in sibling modules
@@ -31,6 +32,7 @@ _LAZY_ADAPTERS = {
     "YAMNetAdapter": "yamnet",
     "PerchAdapter": "perch",
     "Perch2Adapter": "perch_v2",
+    "PerchProbeAdapter": "perch_probe",
 }
 
 
