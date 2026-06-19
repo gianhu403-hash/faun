@@ -138,14 +138,29 @@ def test_header_only_file_falls_back(tmp_path):
     assert preds[0].species.startswith("species_")
 
 
-def test_out_of_range_logit_index_falls_back(tmp_path):
-    """More logits than label rows -> the surplus index uses species_<i>, no IndexError."""
+def test_label_count_mismatch_falls_back_entirely(tmp_path):
+    """Fail-safe: labels count != logits count -> species_<i> for ALL (no off-by-one).
+
+    A label list that is not 1:1 with the logits must NOT be trusted positionally
+    (that would report every bird as its neighbour). The guard drops to species_<i>.
+    """
     _write_assets(tmp_path, ["inat2024_fsd50k", "Turdus merula", "Fringilla coelebs"])
-    adapter = _adapter(tmp_path, n_classes=3)  # 3 logits but only 2 labels
+    adapter = _adapter(tmp_path, n_classes=3)  # 3 logits but only 2 class rows
     preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
     names = {p.species for p in preds}
-    assert "Turdus merula" in names
-    assert any(n.startswith("species_") for n in names)
+    assert "Turdus merula" not in names  # mismatch -> do NOT mislabel
+    assert all(n.startswith("species_") for n in names)
+
+
+def test_no_header_file_keeps_all_rows(tmp_path):
+    """A labels file with NO taxonomy header (row 0 is a real binomial) keeps every row."""
+    # 3 binomial names, no namespace header; 3 logits -> 1:1 -> real names used.
+    _write_assets(tmp_path, ["Turdus merula", "Fringilla coelebs", "Parus major"])
+    adapter = _adapter(tmp_path, n_classes=3)
+    labels = adapter._load_labels()
+    assert labels == ["Turdus merula", "Fringilla coelebs", "Parus major"]
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert preds[0].species == "Turdus merula"  # row 0 not dropped
 
 
 # ---------------------------------------------------------------------------

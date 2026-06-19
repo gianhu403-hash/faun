@@ -306,9 +306,80 @@ def test_export_labels_keeps_only_ground_truth(tmp_path, capsys):
     assert row["species"] == "Fringilla coelebs"
     assert row["source"] == "operator:ranger"
     assert row["status"] == "corrected"
-    assert row["segment_path"] == "segments/det1.wav"
+    # segment_path is ABSOLUTE so the CSV feeds `faun retrain` from any location.
+    assert Path(row["segment_path"]).is_absolute()
+    assert row["segment_path"].endswith("segments/det1.wav")
     # Columns must match what `faun retrain` consumes.
     assert {"species", "source", "status", "segment_path"} <= set(row.keys())
+
+
+def test_export_labels_then_retrain_resolves_clips(tmp_path):
+    """End-to-end: export-labels -> retrain resolves the exported clips (closed loop).
+
+    The exported CSV lives in a DIFFERENT directory than the job, proving the
+    absolute segment_path lets retrain resolve clips regardless of --audio-dir.
+    """
+    import csv
+    import json
+
+    import numpy as np
+    import soundfile as sf
+
+    from faun import retraining
+
+    job = tmp_path / "job"
+    (job / "segments").mkdir(parents=True)
+    dets = []
+    for sp, did in [("Turdus merula", "d0"), ("Fringilla coelebs", "d1")]:
+        sf.write(
+            job / "segments" / f"{did}.wav", np.zeros(16000, dtype=np.float32), 16000
+        )
+        dets.append(
+            {
+                "detection_id": did,
+                "trap_id": "A1",
+                "source_file": "r.wav",
+                "segment": {"start_s": 0.0, "duration_s": 1.0},
+                "segment_path": f"segments/{did}.wav",
+                "labels": [
+                    {
+                        "species": sp,
+                        "probability": None,
+                        "source": "operator:ranger",
+                        "status": "corrected",
+                        "ts": "t",
+                    }
+                ],
+            }
+        )
+    (job / "detections.jsonl").write_text(
+        "\n".join(json.dumps(d) for d in dets) + "\n", encoding="utf-8"
+    )
+
+    # Export to a directory UNRELATED to the job (tests absolute-path resolution).
+    csv_out = tmp_path / "elsewhere" / "labels.csv"
+    assert main(["export-labels", "--job", str(job), "--out", str(csv_out)]) == 0
+    rows = list(csv.DictReader(csv_out.open(encoding="utf-8")))
+    assert len(rows) == 2
+    assert all(Path(r["segment_path"]).is_absolute() for r in rows)
+
+    class _FakeModel:
+        def __init__(self):
+            self.n = 0
+
+        def embed(self, wav, sr):
+            self.n += 1
+            return np.full(8, float(self.n), dtype=np.float32)
+
+    # audio_dir intentionally unrelated; the absolute segment_path must resolve.
+    metrics = retraining.retrain_from_labels(
+        rows,
+        audio_dir=tmp_path / "unrelated",
+        model=_FakeModel(),
+        out_path=tmp_path / "probe.pkl",
+    )
+    assert metrics["n"] == 2  # both clips resolved + embedded (loop is closed)
+    assert "out_path" in metrics
 
 
 def test_process_url_passthrough_no_path_mangle(monkeypatch):

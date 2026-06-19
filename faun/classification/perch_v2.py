@@ -68,6 +68,12 @@ PERCH_V2_PEAK = 0.25
 #: NOT a class) + 14795 class rows. ``_load_labels`` drops that header line.
 PERCH_V2_LABELS_FILE = "labels.csv"
 
+#: Known leading-header tokens in Perch 2 label assets (the first line names the
+#: taxonomy/namespace, NOT a class). Real class names are binomial ("Genus
+#: species"), so a no-space first token is also treated as a header — but the
+#: load-bearing guard is the len(labels)==len(logits) cross-check in ``classify``.
+_LABELS_HEADER_SENTINELS = frozenset({"inat2024_fsd50k", "ebird2021"})
+
 #: Kaggle model handles. GPU handle is the default; the *_cpu variant is the
 #: cluster CPU-only build (TF without CUDA).
 PERCH_V2_HANDLE_GPU = "google/bird-vocalization-classifier/tensorFlow2/perch_v2/2"
@@ -275,16 +281,24 @@ class Perch2Adapter:
         # One value per line; tolerate an accidental extra column by taking the
         # first comma-field. Drop blank lines.
         rows = [ln.split(",")[0].strip() for ln in text.splitlines() if ln.strip()]
-        if len(rows) < 2:
+        if not rows:
+            logger.warning("Perch 2 labels file %s is empty; using species_<i>", assets)
+            return None
+        # Drop a leading taxonomy/namespace header ONLY when row 0 looks like a
+        # header (a known sentinel, or a single token with no internal space —
+        # real class names are binomial "Genus species"). Otherwise keep every
+        # row. This avoids silently dropping a real class if a future asset
+        # layout has no header line. The decisive correctness guard is the
+        # len(labels) == len(logits) cross-check in ``classify``.
+        first = rows[0]
+        if first in _LABELS_HEADER_SENTINELS or " " not in first:
+            rows = rows[1:]
+        if not rows:
             logger.warning(
-                "Perch 2 labels file %s has too few rows (%d); using species_<i>",
-                assets,
-                len(rows),
+                "Perch 2 labels file %s has no class rows; using species_<i>", assets
             )
             return None
-        # Drop the leading taxonomy/namespace header so row 0 of the remainder
-        # aligns with logit index 0.
-        self.labels = rows[1:]
+        self.labels = rows
         logger.info(
             "loaded %d Perch 2 species labels from %s", len(self.labels), assets
         )
@@ -303,6 +317,18 @@ class Perch2Adapter:
         logits, _embedding = self._infer(segment, sr)
         scores = logits[0] if logits.ndim > 1 else logits
         labels = self._load_labels()
+        # Fail-safe against a silent off-by-one: the label list MUST be 1:1 with
+        # the logits. If a future asset layout breaks that (e.g. an un-dropped
+        # header, or a different model variant), refuse to mislabel — fall back
+        # to species_<i> rather than reporting every bird as its neighbour.
+        if labels is not None and len(labels) != len(scores):
+            logger.warning(
+                "Perch 2 label count (%d) != logit count (%d); naming predictions "
+                "species_<i> to avoid an off-by-one mislabel",
+                len(labels),
+                len(scores),
+            )
+            labels = None
         order = np.argsort(scores)[::-1][: self.top_k]
 
         def _name(i: int) -> str:

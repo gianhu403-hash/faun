@@ -138,3 +138,42 @@ def run_batch(entries, *, read_waveform, build_labels, extractor=None) -> Iterat
 #   out-of-range -> 422); LabelRequest.species/source get length bounds. run_pipeline + batch_label
 #   remove <workdir>/_source on exit (finally) — the remote-ingest disk-leak guard.
 ```
+
+## v5 additions — real Perch 2 labels, Perch-probe serving, label export, TF image (ADDITIVE)
+
+Added by the perch2-live wave (real Perch 2 on prod). Every FROZEN signature above is
+unchanged; only new methods, a new adapter, a new CLI subcommand and a new deploy
+artifact are introduced.
+
+```python
+# faun/classification/perch_v2: Perch2Adapter now names predictions with REAL species.
+#   _load_labels() -> list[str] | None   # lazily reads <model_path>/assets/labels.csv,
+#     DROPS the leading taxonomy header line (e.g. "inat2024_fsd50k"); the rest are
+#     scientific names aligned 1:1 with the 'label' logits (verified real file = 14795).
+#     Missing/garbage assets -> None -> classify() falls back to species_<i> (never crashes);
+#     result cached; pure file I/O (TF-free). classify() guards out-of-range logit indices.
+#     PERCH_V2_LABELS_FILE = "labels.csv".
+
+# faun/classification/perch_probe: Perch 2 embeddings + a trained probe head (served).
+class PerchProbeAdapter(probe=None, probe_path=None, model_path=None, labels=None, top_k=5)
+#   classify(segment, sr)->list[Prediction]: Perch2 embed(1536) -> probe.predict_proba ->
+#     ranked Predictions (names from probe.classes_, then labels arg, then species_<i>).
+#     No probe -> [Prediction("embedding_only", 0.0)] + last_embedding stashed.
+#   embed(waveform, sr)->np.ndarray[1536]   # delegates to Perch2Adapter (lazy TF).
+#   Probe: explicit arg -> probe_path -> PERCH_V2_PROBE_PATH. Registered for
+#   FAUN_CLASSIFIER=perch-probe; detections source SOURCE_PERCH_V2_PROBE = "model:perch-v2-probe".
+
+# faun/settings: + perch_v2_probe_path (PERCH_V2_PROBE_PATH) — operator-supplied local probe.
+# faun/detections: + SOURCE_PERCH_V2_PROBE = "model:perch-v2-probe".
+
+# faun/cli (additive):
+#   faun retrain --model now accepts yamnet|perch|perch-v2 (probe backbone; was yamnet-only).
+#   faun export-labels --job <dir> --out <csv>   # detections.jsonl -> retrain CSV, keeping ONLY
+#     is_ground_truth labels (human expert/ranger + confirmed/corrected); columns species,source,
+#     status,segment_path,... consumable by `faun retrain`. Closes the review->retrain loop.
+
+# deploy/Dockerfile.ml (NEW): TF Perch 2 serving image — same python:3.12-slim digest base as the
+#   slim image + requirements-ml.txt (tensorflow-cpu==2.20.0 + kagglehub==1.0.2) + experiments/wrappers
+#   (the Perch2Adapter._infer delegate). Defaults FAUN_CLASSIFIER=perch-v2 + PERCH_V2_MODEL_PATH=
+#   /models/perch2 (model in a volume, not the image). slim deploy/Dockerfile stays TF-free = rollback.
+```

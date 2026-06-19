@@ -311,6 +311,13 @@ def _export_labels(job_dir: Path, out_path: Path) -> int:
                 continue
             det = json.loads(line)
             seg = det.get("segment") or {}
+            # Emit an ABSOLUTE clip path: detections.jsonl stores segment_path
+            # job-relative ("segments/<id>.wav"), but `faun retrain` resolves
+            # clips against its --audio-dir (default = the labels CSV's parent).
+            # Absoluting it here makes the exported CSV feed retrain from ANY
+            # location (audio_dir / abs == abs), truly closing the review loop.
+            seg_rel = det.get("segment_path", "")
+            seg_abs = str((job_dir / seg_rel).resolve()) if seg_rel else ""
             for lbl in det.get("labels") or []:
                 if not is_ground_truth(lbl):
                     continue
@@ -319,7 +326,7 @@ def _export_labels(job_dir: Path, out_path: Path) -> int:
                         "species": lbl.get("species", ""),
                         "source": lbl.get("source", ""),
                         "status": lbl.get("status", ""),
-                        "segment_path": det.get("segment_path", ""),
+                        "segment_path": seg_abs,
                         "source_file": det.get("source_file", ""),
                         "start_sec": seg.get("start_s", ""),
                         "duration_sec": seg.get("duration_s", ""),
