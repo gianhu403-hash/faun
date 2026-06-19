@@ -72,6 +72,25 @@ _PERCH2_PEAK = 0.25
 _LABELS_HEADER_SENTINELS = frozenset({"inat2024_fsd50k", "ebird2021"})
 _PERCH_V2_LABELS_FILE = "labels.csv"
 
+#: Тег предобработки эмбеддингов — часть идентичности кэша (#SF-1). Если кэш
+#: записан с иной нормировкой, переиспользовать его НЕЛЬЗЯ (тихий train/serve
+#: skew). Пишется в sidecar ``<cache>.preproc``; на загрузке сверяется. Бэк-компат:
+#: отсутствие sidecar (старый кэш) → warning + reuse (этот скрипт всегда
+#: peak-normalize, так что старый кэш этого же скрипта валиден).
+_PREPROC_TAG = "downmix-resample32k-fitwin160000-peak0.25"
+
+
+def _binomial(species: str) -> str:
+    """``Genus_species`` (имя папки iNatSounds) -> ``Genus species`` (биномиал).
+
+    Дерево датасета хранит вид как ``Genus_species`` (подчёркивание), а и
+    ``assets/labels.csv`` Perch 2, и список RESERVE, и прод-вывод используют
+    биномиал с пробелом. Без этой нормализации (а) проба обучилась бы на классах
+    ``Fringilla_coelebs`` — заказчик увидел бы подчёркивания, и (б) zero-shot
+    маппинг по именам в labels.csv дал бы НОЛЬ совпадений (тихо null baseline).
+    """
+    return species.replace("_", " ")
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -115,33 +134,45 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _embed_and_logits(records, cache_path: Path):
+def _embed_and_logits(records, cache_path: Path, *, needs_logits: bool):
     """Эмбеддинги [N,1536] + логиты [N,Cfull]|None + метки y для набора записей.
 
     ОДИН forward Perch 2 на чанк даёт И эмбеддинги, И логиты (второго прохода
-    нет, #F2). Предобработка — та же, что в ``Perch2Embedder``: downmix ->
-    resample(32k) -> fit_window(160000) через ``faun.audio`` (единый владелец,
-    ADR-0002). Эмбеддинги кэшируются в ``cache_path`` (npz через
-    ``EmbeddingCache``); при совпадении длины и формы кэш переиспользуется, но
-    логиты считаются заново каждый прогон (val маленький, zero-shot дешёвый).
+    нет, #F2). Предобработка — та же, что в ``Perch2Embedder`` ПЛЮС peak-normalize
+    к 0.25 (serve-parity с ``Perch2Adapter._prepare``, см. ниже): downmix ->
+    resample(32k) -> fit_window(160000) -> peak-norm через ``faun.audio``.
 
-    Возвращает ``(X[N,1536], logits[N,Cfull]|None, y[N])`` с порядком строк,
-    выровненным по ``records``.
+    Кэш (#CR-1, #SF-1): эмбеддинги кэшируются в ``cache_path`` (npz через
+    ``EmbeddingCache``) + sidecar ``<cache>.preproc`` с тегом предобработки.
+    На загрузке: shape+ids+preproc-тег должны совпасть. Если ``needs_logits``
+    False (train-путь) и кэш валиден — forward НЕ запускается вовсе (train.npz
+    реально экономит ~40 мин). Если ``needs_logits`` True (val-путь, нужны логиты
+    для zero-shot) — forward всё равно идёт (логиты не кэшируются), но эмбеддинги
+    берутся из кэша как источник истины.
 
-    Тяжёлый TF тянется лениво внутри ``experiments.wrappers.perch_v2.embed`` —
-    вызывается через атрибут модуля.
+    ``y`` нормализуется в биномиал (``Genus_species`` -> ``Genus species``), чтобы
+    классы пробы, RESERVE и labels.csv жили в одном пространстве имён.
+
+    Возвращает ``(X[N,1536], logits[N,Cfull]|None, y[N])``, строки выровнены по
+    ``records``. Тяжёлый TF тянется лениво внутри wrapper'а.
     """
     import soundfile as sf
 
     from faun import audio
     import experiments.wrappers.perch_v2 as perch_v2
 
-    y = np.asarray([rec.species for rec in records])
+    y = np.asarray([_binomial(rec.species) for rec in records])
     ids = [rec.path for rec in records]
+    preproc_sidecar = cache_path.with_suffix(".preproc")
 
-    # Готовим окна 32k/160000 для всех записей (та же предобработка, что у
-    # Perch2Embedder; peak-normalize у эмбеддера НЕ применяется — он живёт в
-    # Perch2Adapter._prepare, не в Perch2Embedder).
+    # -- попытка переиспользовать кэш эмбеддингов (#CR-1/#SF-1) ----------------
+    cached_X = _load_cached_embeddings(cache_path, preproc_sidecar, ids, perch_v2.DIM)
+    if cached_X is not None and not needs_logits:
+        # train-путь: эмбеддинги есть, логиты не нужны → forward пропускаем.
+        logger.info("cache hit + logits not needed → skipping Perch 2 forward")
+        return cached_X, None, y
+
+    # Готовим окна 32k/160000 (та же предобработка, что обслуживает прод).
     windows = []
     for rec in records:
         wav, sr = sf.read(rec.path)
@@ -167,31 +198,6 @@ def _embed_and_logits(records, cache_path: Path):
 
     batch = np.stack(windows).astype(np.float32)  # [N, 160000]
 
-    # Попытка переиспользовать кэш эмбеддингов (только эмбеддинги; логиты всегда
-    # свежие). Кэш валиден лишь когда длина и DIM совпадают с текущим набором —
-    # иначе тихий рассинхрон строк/меток. Логиты считаем всё равно (нужны для
-    # zero-shot на том же наборе).
-    from faun.embeddings import EmbeddingCache
-
-    cached_X = None
-    if cache_path.is_file():
-        try:
-            cache = EmbeddingCache.load(cache_path)
-            if (
-                cache.embeddings.shape == (len(records), perch_v2.DIM)
-                and cache.ids == ids
-            ):
-                cached_X = np.asarray(cache.embeddings, dtype=np.float32)
-                logger.info("reusing cached embeddings: %s", cache_path)
-            else:
-                logger.warning(
-                    "cache %s shape/ids mismatch (got %s); recomputing",
-                    cache_path,
-                    cache.embeddings.shape,
-                )
-        except ValueError as exc:
-            logger.warning("ignoring corrupt cache %s: %s", cache_path, exc)
-
     # Один forward на чанк: и эмбеддинги, и логиты (избегаем второго прохода, #F2).
     emb_parts: list[np.ndarray] = []
     logit_parts: list[np.ndarray] = []
@@ -211,16 +217,62 @@ def _embed_and_logits(records, cache_path: Path):
         else None
     )
 
-    # Кэшируем свежие эмбеддинги (если из кэша не пришли). Логиты не кэшируем.
-    if cached_X is None:
-        EmbeddingCache(embeddings=X, ids=ids, labels=list(y)).save(cache_path)
-        logger.info("cached embeddings -> %s", cache_path)
-    else:
-        # Предпочитаем кэш как источник истины эмбеддингов (детерминизм между
-        # прогонами); логиты всё равно свежие из этого forward.
+    # Источник истины эмбеддингов — кэш (если валиден); логиты всегда свежие.
+    if cached_X is not None:
         X = cached_X
+    else:
+        from faun.embeddings import EmbeddingCache
+
+        EmbeddingCache(embeddings=X, ids=ids, labels=list(y)).save(cache_path)
+        preproc_sidecar.write_text(_PREPROC_TAG, encoding="utf-8")
+        logger.info("cached embeddings -> %s (preproc=%s)", cache_path, _PREPROC_TAG)
 
     return X, all_logits, y
+
+
+def _load_cached_embeddings(cache_path, preproc_sidecar, ids, dim):
+    """Вернуть кэш-эмбеддинги [N,dim] если валиден, иначе ``None`` (#CR-1/#SF-1).
+
+    Валидность: файл читается, ``shape == (len(ids), dim)``, ``ids`` совпадают,
+    и preproc-тег sidecar совпадает с :data:`_PREPROC_TAG`. Отсутствие sidecar
+    (старый кэш этого же скрипта) — warning + reuse (бэк-компат: скрипт всегда
+    peak-normalize). Несовпадение тега — recompute (защита от train/serve skew).
+    """
+    from faun.embeddings import EmbeddingCache
+
+    if not Path(cache_path).is_file():
+        return None
+    try:
+        cache = EmbeddingCache.load(cache_path)
+    except ValueError as exc:
+        logger.warning("ignoring corrupt cache %s: %s", cache_path, exc)
+        return None
+    if cache.embeddings.shape != (len(ids), dim) or cache.ids != ids:
+        logger.warning(
+            "cache %s shape/ids mismatch (got %s); recomputing",
+            cache_path,
+            cache.embeddings.shape,
+        )
+        return None
+    sidecar = Path(preproc_sidecar)
+    if sidecar.is_file():
+        tag = sidecar.read_text(encoding="utf-8").strip()
+        if tag != _PREPROC_TAG:
+            logger.warning(
+                "cache %s preproc tag %r != %r; recomputing (avoid train/serve skew)",
+                cache_path,
+                tag,
+                _PREPROC_TAG,
+            )
+            return None
+    else:
+        logger.warning(
+            "cache %s has no preproc sidecar; reusing (back-compat — this script "
+            "always peak-normalizes)",
+            cache_path,
+        )
+    logger.info("reusing cached embeddings: %s", cache_path)
+    return np.asarray(cache.embeddings, dtype=np.float32)
 
 
 def _load_perch2_labels(model_path: str | None):
@@ -303,6 +355,68 @@ def _zero_shot_macro_f1(y_val, val_logits, model_path, probe_classes):
     return score, coverage
 
 
+def _gate_comparison(clf, X_val, y_val, val_logits, model_path):
+    """Apples-to-apples проба-vs-zero-shot на ОДНОМ пространстве меток (#COMP-2/ARCH-2).
+
+    Полный ``_zero_shot_macro_f1`` штрафует baseline за виды, которых нет в
+    eBird-таксономии Perch 2 (структурно недостижимы) — это честно как «цена
+    покрытия», но НЕ годится как число гейта: проба сравнивалась бы с искусственно
+    ослабленным baseline. Здесь ОБА (проба и zero-shot) считаются на ПЕРЕСЕЧЕНИИ:
+    виды, которые (а) есть в val И (б) маппятся на колонку логита Perch 2. На этом
+    наборе и проба, и zero-shot выбирают из одних и тех же кандидатов — сравнение
+    корректно.
+
+    Возвращает dict ``{gate_n, gate_species_n, gate_probe_macro_f1,
+    gate_zero_shot_macro_f1}`` либо ``None`` (логитов нет / меток нет / пересечение
+    < 2 видов — гейт читает None как «не могу подтвердить превосходство»).
+    """
+    if val_logits is None:
+        return None
+    label_names = _load_perch2_labels(model_path)
+    if not label_names:
+        return None
+
+    name_to_col = {name: col for col, name in enumerate(label_names)}
+    val_species = set(map(str, np.asarray(y_val).tolist()))
+    # Пересечение: класс пробы, который И в val, И маппится на колонку логита.
+    inter = [
+        str(c) for c in clf.classes_ if str(c) in name_to_col and str(c) in val_species
+    ]
+    if len(inter) < 2:
+        logger.warning(
+            "gate intersection < 2 species (%d); gate comparison = null", len(inter)
+        )
+        return None
+
+    inter_set = set(inter)
+    mask = np.array([str(s) in inter_set for s in np.asarray(y_val)])
+    if not mask.any():
+        return None
+
+    y_inter = np.asarray(y_val)[mask]
+    classes = list(map(str, clf.classes_))
+    probe_cols = [classes.index(c) for c in inter]
+    proba = np.asarray(clf.predict_proba(np.asarray(X_val)[mask]))[:, probe_cols]
+    probe_pred = np.asarray([inter[i] for i in np.argmax(proba, axis=1)])
+
+    logit_cols = [name_to_col[c] for c in inter]
+    zs = np.asarray(val_logits)[mask][:, logit_cols]
+    zs_pred = np.asarray([inter[i] for i in np.argmax(zs, axis=1)])
+
+    from sklearn.metrics import f1_score
+
+    return {
+        "gate_n": int(mask.sum()),
+        "gate_species_n": len(inter),
+        "gate_probe_macro_f1": float(
+            f1_score(y_inter, probe_pred, average="macro", zero_division=0)
+        ),
+        "gate_zero_shot_macro_f1": float(
+            f1_score(y_inter, zs_pred, average="macro", zero_division=0)
+        ),
+    }
+
+
 def _coerce(value):
     """numpy-скаляры -> питоновские float/int для json.dump."""
     if isinstance(value, np.floating):
@@ -350,8 +464,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # -- 2. эмбеддинги ПО СПЛИТАМ, отдельный forward на сплит (#F2 без утечки) --
     # train и val эмбеддятся РАЗДЕЛЬНО, каждый в свой npz-кэш под cache-dir.
-    X_train, _train_logits, y_train = _embed_and_logits(train, cache_dir / "train.npz")
-    X_val, val_logits, y_val = _embed_and_logits(val, cache_dir / "val.npz")
+    # train: логиты не нужны (обучаем пробу на эмбеддингах) → кэш экономит forward
+    # (#CR-1). val: логиты нужны для zero-shot → forward всё равно идёт.
+    X_train, _train_logits, y_train = _embed_and_logits(
+        train, cache_dir / "train.npz", needs_logits=False
+    )
+    X_val, val_logits, y_val = _embed_and_logits(
+        val, cache_dir / "val.npz", needs_logits=True
+    )
     print(
         f"embeddings: train X={X_train.shape}, val X={X_val.shape} "
         f"(val logits: {'present' if val_logits is not None else 'none'})"
@@ -400,6 +520,20 @@ def main(argv: list[str] | None = None) -> int:
             f"coverage={zero_shot_coverage}/{len(clf.classes_)} classes"
         )
 
+    # -- 5b. apples-to-apples гейт-сравнение на пересечении (#COMP-2/ARCH-2) --
+    # Для РЕШЕНИЯ о выкатке используем числа на ОДНОМ пространстве меток (виды в
+    # val, маппящиеся на колонку логита Perch 2), а не полный-val baseline,
+    # который структурно занижен.
+    gate = _gate_comparison(clf, X_val, y_val, val_logits, model_path)
+    if gate is None:
+        print("gate comparison: null (cannot fairly compare probe vs zero-shot)")
+    else:
+        print(
+            f"gate (intersection, {gate['gate_species_n']} species, n={gate['gate_n']}): "
+            f"probe_macro_f1={gate['gate_probe_macro_f1']:.4f} vs "
+            f"zero_shot_macro_f1={gate['gate_zero_shot_macro_f1']:.4f}"
+        )
+
     # -- 6. деплой-проба на ВСЁМ наборе (#F1) --------------------------------
     # held-out clf измеряет КАЧЕСТВО; деплой-артефакт обучается на train+val,
     # чтобы не выбрасывать 20% данных из прода.
@@ -408,6 +542,21 @@ def main(argv: list[str] | None = None) -> int:
     clf_full, _cv_full = train_probe_cv(X_all, y_all, seed=args.seed)
     probe_out = save_probe(clf_full, args.probe_out)
     print(f"deploy probe (trained on train+val) saved -> {probe_out}")
+
+    # -- 6b. measured == deployed гейт (#COMP-1) -----------------------------
+    # Заголовочное число измерено на видах val; деплой-проба обучена на train+val.
+    # Если у пробы есть классы, которых НЕ было в val (одно-клиповые виды целиком
+    # ушли в train), held-out число их НЕ покрывает — заказчику об этом честно.
+    measured_species = sorted(report["per_species_recall"].keys())
+    deployed_species = sorted(str(c) for c in clf_full.classes_)
+    unmeasured = sorted(set(deployed_species) - set(measured_species))
+    if unmeasured:
+        logger.warning(
+            "deploy probe serves %d species NOT measured on val (single-clip → "
+            "all-train): %s — held-out macro-F1 does not cover them",
+            len(unmeasured),
+            unmeasured,
+        )
 
     # -- 7. JSON-сводка ------------------------------------------------------
     summary = {
@@ -427,14 +576,31 @@ def main(argv: list[str] | None = None) -> int:
             None if zero_shot_macro_f1 is None else float(zero_shot_macro_f1)
         ),
         "zero_shot_coverage": int(zero_shot_coverage),
-        "probe_classes": [str(c) for c in clf_full.classes_],
+        # apples-to-apples гейт-числа на пересечении (#COMP-2/ARCH-2): именно их
+        # сравнивает V3-гейт (probe >= zero-shot), не полный-val baseline.
+        "gate_probe_macro_f1": (None if gate is None else gate["gate_probe_macro_f1"]),
+        "gate_zero_shot_macro_f1": (
+            None if gate is None else gate["gate_zero_shot_macro_f1"]
+        ),
+        "gate_species_n": (None if gate is None else gate["gate_species_n"]),
+        "gate_n": (None if gate is None else gate["gate_n"]),
+        "probe_classes": deployed_species,
+        "measured_species": measured_species,
+        "unmeasured_deployed_species": unmeasured,
         "provenance": "real-eval",
         "probe_out": str(probe_out),
         "note": (
             "headline = heldout_macro_f1 on the DISJOINT val (real-eval, "
-            "synthetic=False); cv_* is secondary; zero_shot_macro_f1 is the "
-            "Perch 2 untrained-head baseline on the SAME val (null = cannot "
-            "confirm probe superiority)."
+            "synthetic=False); cv_* is the TRAIN-only CV (secondary, defensible). "
+            "V3 gate compares gate_probe_macro_f1 vs gate_zero_shot_macro_f1 "
+            "(apples-to-apples on the val species that map to a Perch 2 logit "
+            "column); plain zero_shot_macro_f1 is over full val (coverage-honest "
+            "but pessimistic). CAVEAT (DEVIL-1/COMP-3): embeddings are the first "
+            "5 s of each iNat focal clip (fit_window left-crop), whereas prod "
+            "feeds an onset-DETECTED segment — a whole-clip-vs-onset domain shift, "
+            "so this number characterises probe quality on iNat heads, not raw180 "
+            "serving accuracy. species labels are binomial (Genus species) to "
+            "match RESERVE/labels.csv and the served name space."
         ),
     }
     summary_out = Path(args.summary_out)

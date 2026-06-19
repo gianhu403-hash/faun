@@ -73,6 +73,27 @@ def test_reserve_matches_chosen_first_and_sorted_desc() -> None:
     assert all(not e.get("_topped_up") for e in selected)
 
 
+def test_reserve_hits_truncated_to_n_species_no_topup() -> None:
+    # 4 reserve-совпадения, но n_species=2: берём 2 с наибольшим clip_count,
+    # 2 меньших — отсутствуют, top-up НЕ запускается (reserve уже заполнил
+    # n_species), значит ни один не помечен _topped_up (#CR-3).
+    catalog = [
+        _entry("Turdus merula", 100),
+        _entry("Parus major", 400),
+        _entry("Erithacus rubecula", 300),
+        _entry("Fringilla coelebs", 50),
+        _entry("Corvus monedula", 999),  # не-reserve: не должен влезть
+    ]
+    selected = select_targets(
+        catalog, RESERVE_SAMPLE, n_species=2, cap=120, min_clips=10
+    )
+    assert _names(selected) == ["Parus major", "Erithacus rubecula"]
+    assert "Turdus merula" not in _names(selected)
+    assert "Fringilla coelebs" not in _names(selected)
+    assert "Corvus monedula" not in _names(selected)  # top-up не сработал
+    assert all(not e.get("_topped_up") for e in selected)
+
+
 def test_reserve_tie_broken_by_name_asc() -> None:
     # Одинаковый clip_count -> детерминированный тай-брейк по имени возр.
     catalog = [
