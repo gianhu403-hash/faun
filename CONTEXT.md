@@ -77,9 +77,10 @@
 `label.source` начинается на `expert:` или `operator:` (человек) **И**
 `label.status ∈ {confirmed, corrected}`.
 
-Псевдо-метки моделей (`model:*`, всегда `pseudo`) **никогда** не ground truth. Та же
-семантика продублирована (намеренно, для развязки модулей) в `faun.retraining.is_ground_truth`.
-Это hard-гейт обучения: `faun.retraining.retrain_from_labels` отказывается (`ValueError`)
+Псевдо-метки моделей (`model:*`, всегда `pseudo`) **никогда** не ground truth. Единый дом —
+`faun.detections` (`is_ground_truth` + `TRAINING_EXCLUDED_SOURCES`); `faun.retraining` и
+`faun.labeling` их **импортируют**, не дублируют. `is_ground_truth` принимает и `Label`-объект,
+и dict. Это hard-гейт обучения: `faun.retraining.retrain_from_labels` отказывается (`ValueError`)
 до любого обращения к модели, если ground-truth-меток нет.
 
 ## Контракт входа классификатора (ловушка)
@@ -89,10 +90,10 @@
 а **НЕ** объект `Segment`. Реальные адаптеры делают `np.asarray(segment)` — передать туда
 `faun.segmentation.Segment` нельзя.
 
-И `run_pipeline` (`faun/api.py`), и `batch_label` (`faun/labeling/__init__.py`) перед
-вызовом `classify` режут клип из оригинала, делают downmix в mono и resample до
-`CLASSIFY_SR = 16000`. См. `faun.labeling._to_classifier_input` с явным комментарием на эту
-ловушку.
+И `run_pipeline` (`faun/api.py`), и `batch_label` (`faun/labeling/__init__.py`) идут через
+общий исполнитель `faun.pipeline.run_batch`, который режет клип из оригинала (`slice_clip`),
+делает downmix в mono и resample до `CLASSIFY_SR = 16000` (`to_classifier_input`, препроцессинг —
+в `faun.audio`). См. `faun.pipeline.to_classifier_input` с явным комментарием на эту ловушку.
 
 ## Размерности эмбеддеров (известная ловушка)
 
