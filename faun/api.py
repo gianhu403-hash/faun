@@ -102,6 +102,10 @@ def _build_classifier():
         from faun.classification import Perch2Adapter
 
         return Perch2Adapter()
+    if choice == "perch-probe":
+        from faun.classification import PerchProbeAdapter
+
+        return PerchProbeAdapter()
     if choice == "birdnet":
         from faun.classification import BirdNETAdapter
 
@@ -112,7 +116,7 @@ def _build_classifier():
         return YAMNetAdapter()
     raise ValueError(
         f"unknown FAUN_CLASSIFIER={choice!r}; expected one of "
-        "stub, perch, perch-v2, birdnet, yamnet"
+        "stub, perch, perch-v2, perch-probe, birdnet, yamnet"
     )
 
 
@@ -126,6 +130,7 @@ def _classifier_source(classifier) -> str:
         SOURCE_BIRDNET,
         SOURCE_PERCH,
         SOURCE_PERCH_V2,
+        SOURCE_PERCH_V2_PROBE,
         SOURCE_STUB,
         SOURCE_YAMNET_PROBE,
     )
@@ -135,6 +140,7 @@ def _classifier_source(classifier) -> str:
         "StubAdapter": SOURCE_STUB,
         "PerchAdapter": SOURCE_PERCH,
         "Perch2Adapter": SOURCE_PERCH_V2,
+        "PerchProbeAdapter": SOURCE_PERCH_V2_PROBE,
         "BirdNETAdapter": SOURCE_BIRDNET,
         "YAMNetAdapter": SOURCE_YAMNET_PROBE,
     }
