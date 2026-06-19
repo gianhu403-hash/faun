@@ -22,6 +22,7 @@ stdlib + numpy; тяжёлый ML — только через переданны
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Mapping
 
@@ -40,13 +41,9 @@ from faun.detections import (
 )
 from faun.embeddings import Embedder, EmbeddingCache, _embedder_dim, embed_batch
 from faun.ingest import scan
-from faun.pipeline import run_batch
+from faun.pipeline import CLASSIFY_SR, run_batch
 
 __all__ = ["batch_label", "training_candidates"]
-
-#: Классификаторы получают mono @ 16 кГц — тот же контракт SpeciesClassifier,
-#: что и в ``faun.api.run_pipeline`` (НЕ сам объект Segment).
-CLASSIFY_SR = 16_000
 
 #: Консенсус-арки: детекция «в консенсусе», когда КАЖДАЯ арка дала вид и виды
 #: пересекаются. Арка Perch принимает Perch 1 ИЛИ Perch 2 — оператор может
@@ -135,47 +132,54 @@ def batch_label(
 
     from faun.sources import resolve_source
 
-    # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
-    scan_dir = resolve_source(str(archive), out_jsonl.parent)
-    manifest = scan(scan_dir)
+    try:
+        # archive may be a local dir, an http(s) zip URL, or a Yandex.Disk share.
+        scan_dir = resolve_source(str(archive), out_jsonl.parent)
+        manifest = scan(scan_dir)
 
-    # Single shared executor pass (faun.pipeline.run_batch): detections + their
-    # original-sr clips (waveform, sr) row-aligned for the optional embeddings
-    # export. Reading at float32 here keeps batch_label's prior dtype behaviour.
-    results = list(
-        run_batch(
-            manifest.entries, read_waveform=_read_clip, build_labels=_build_labels
+        # Single shared executor pass (faun.pipeline.run_batch): detections + their
+        # original-sr clips (waveform, sr) row-aligned for the optional embeddings
+        # export. Reading at float32 here keeps batch_label's prior dtype behaviour.
+        results = list(
+            run_batch(
+                manifest.entries, read_waveform=_read_clip, build_labels=_build_labels
+            )
         )
-    )
-    detections: list[Detection] = [r.detection for r in results]
-    clips: list[tuple[np.ndarray, int]] = [(r.clip, r.sr) for r in results]
+        detections: list[Detection] = [r.detection for r in results]
+        clips: list[tuple[np.ndarray, int]] = [(r.clip, r.sr) for r in results]
 
-    write_detections(out_jsonl, detections)
+        write_detections(out_jsonl, detections)
 
-    n_consensus = sum(1 for det in detections if _consensus_species(det))
+        n_consensus = sum(1 for det in detections if _consensus_species(det))
 
-    summary: dict = {
-        "counts": counts,
-        "n_detections": len(detections),
-        "n_consensus": n_consensus,
-        "paths": {"detections": str(out_jsonl)},
-    }
+        summary: dict = {
+            "counts": counts,
+            "n_detections": len(detections),
+            "n_consensus": n_consensus,
+            "paths": {"detections": str(out_jsonl)},
+        }
 
-    # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера. Переиспользуем
-    # единый владелец ``embed_batch`` (без повторного чтения/сегментации файлов;
-    # строки выровнены с detections по порядку сбора).
-    if emb_out is not None and embedder is not None:
-        emb_out = Path(emb_out)
-        embeddings = (
-            embed_batch(clips, embedder)
-            if clips
-            else np.zeros((0, _embedder_dim(embedder)), dtype=np.float32)
-        )
-        ids = [det.detection_id for det in detections]
-        EmbeddingCache(embeddings=embeddings, ids=ids).save(emb_out)
-        summary["paths"]["embeddings"] = str(emb_out)
+        # Экспорт эмбеддингов — только при наличии и пути, и эмбеддера. Переиспользуем
+        # единый владелец ``embed_batch`` (без повторного чтения/сегментации файлов;
+        # строки выровнены с detections по порядку сбора).
+        if emb_out is not None and embedder is not None:
+            emb_out = Path(emb_out)
+            embeddings = (
+                embed_batch(clips, embedder)
+                if clips
+                else np.zeros((0, _embedder_dim(embedder)), dtype=np.float32)
+            )
+            ids = [det.detection_id for det in detections]
+            EmbeddingCache(embeddings=embeddings, ids=ids).save(emb_out)
+            summary["paths"]["embeddings"] = str(emb_out)
 
-    return summary
+        return summary
+    finally:
+        # B1 disk-leak (symmetry with run_pipeline): drop the downloaded/extracted
+        # REMOTE source tree on exit. resolve_source creates out_jsonl.parent/_source
+        # ONLY for a remote archive; a local pass-through dir is Path(archive)
+        # OUTSIDE out_jsonl.parent and is never touched.
+        shutil.rmtree(out_jsonl.parent / "_source", ignore_errors=True)
 
 
 def training_candidates(detections) -> list:

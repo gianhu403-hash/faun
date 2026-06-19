@@ -307,3 +307,32 @@ class TestBirdnetLicenseGate:
                     lbl.source if isinstance(lbl, Label) else lbl["source"]
                 )
         assert SOURCE_PERCH in all_sources
+
+
+def test_batch_label_cleans_remote_source_tree(tmp_path, monkeypatch):
+    """B1 symmetry: batch_label removes <out>/_source after a REMOTE archive run.
+
+    run_pipeline got the disk-leak cleanup; this asserts batch_label now mirrors
+    it. resolve_source is patched to materialise a remote-style _source/extracted
+    tree (a LOCAL pass-through never creates _source, so the remote path is the
+    one to assert on).
+    """
+    import shutil as _sh
+
+    import faun.sources as sources
+
+    out = tmp_path / "out" / "detections.jsonl"
+    out.parent.mkdir(parents=True)
+
+    def fake_resolve(src, workdir, *, client=None):
+        dest = out.parent / "_source" / "extracted"
+        _sh.copytree(_TRAPS_MINI, dest)
+        return dest
+
+    monkeypatch.setattr(sources, "resolve_source", fake_resolve)
+    models = {"perch": FixedModel([Prediction("Turdus merula", 0.9)])}
+    summary = batch_label("https://disk.yandex.ru/d/X", models, out)
+
+    assert summary["n_detections"] >= 1
+    assert out.exists()
+    assert not (out.parent / "_source").exists(), "remote _source must be cleaned up"

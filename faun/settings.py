@@ -153,6 +153,18 @@ def _env_path_opt(name: str) -> str | None:
     return stripped or None
 
 
+def _env_secret_opt(name: str) -> str | None:
+    """Return an env SECRET verbatim (NO strip), or None if unset / empty string.
+
+    Unlike :func:`_env_path_opt`, credentials are not stripped: a password may
+    legitimately contain surrounding spaces, and an all-whitespace value must
+    stay truthy so the auth gate fails CLOSED (stays enabled) instead of silently
+    disabling itself. Only a missing or empty-string value collapses to ``None``.
+    """
+    raw = os.environ.get(name)
+    return raw or None
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -221,8 +233,8 @@ class Settings:
             perch_v2_model_path=_env_path_opt("PERCH_V2_MODEL_PATH"),
             perch_model_path=_env_path_opt("PERCH_MODEL_PATH"),
             yamnet_probe_path=_env_path_opt("YAMNET_PROBE_PATH"),
-            basic_user=_env_path_opt("FAUN_BASIC_USER"),
-            basic_pass=_env_path_opt("FAUN_BASIC_PASS"),
+            basic_user=_env_secret_opt("FAUN_BASIC_USER"),
+            basic_pass=_env_secret_opt("FAUN_BASIC_PASS"),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
         )
 

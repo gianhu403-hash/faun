@@ -47,9 +47,6 @@ DETECTIONS_JSONL = "detections.jsonl"
 SEGMENTS_DIR = "segments"
 DETECTIONS_LOCK = ".detections.lock"
 
-#: Classifier samplerate contract — real adapters receive a 16 kHz mono array.
-CLASSIFY_SR = 16000
-
 #: detection_id is a uuid4 hex (optionally dashed); reject anything else to
 #: prevent path traversal on the clip-download route.
 _DETECTION_ID_RE = re.compile(r"^[0-9a-fA-F-]+$")

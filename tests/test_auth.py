@@ -85,6 +85,20 @@ def test_healthz_always_open_even_with_auth(env):
     assert resp.json()["service"] == "faun-api"
 
 
+def test_whitespace_password_keeps_auth_enabled(env):
+    """All-whitespace creds must NOT silently disable auth (fail CLOSED).
+
+    Regression: reading creds via a path-style strip helper would turn "   " into
+    None and flip the gate to open. The verbatim secret reader keeps it enabled.
+    """
+    env.setenv("FAUN_BASIC_USER", "ranger")
+    env.setenv("FAUN_BASIC_PASS", "   ")  # whitespace, not empty
+    get_settings.cache_clear()
+    client = TestClient(api.app)
+    assert client.get("/").status_code == 401  # auth still enforced
+    assert client.get("/", headers=_basic("ranger", "   ")).status_code == 200
+
+
 @pytest.mark.parametrize(
     "bad_header",
     [
