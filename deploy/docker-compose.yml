@@ -1,7 +1,8 @@
 # Faun v2 API — один сервис, порт 8010 (НЕ 8003/8005/9000 — заняты демо v1).
 #
-# Сборка/запуск стейдж: локально docker не гоняется. На целевом хосте —
-# `docker compose -f deploy/docker-compose.yml up -d --build` вручную.
+# ДОК-ПАРИТЕТ с реальным продом: фактический cutover делается `docker run` по
+# blue-green-раннбуку (bind 100.64.0.1:8010, том faun-v2-jobs), НЕ `compose up`.
+# Этот файл держим синхронным с прод-командой, чтобы он не расходился с правдой.
 version: "3.8"
 
 services:
@@ -9,20 +10,29 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    image: faun-api:2.0.0-rc
+      args:
+        # Билд-тег прокидывается в образ -> /healthz.version (health-gate сверяет).
+        FAUN_VERSION: ${FAUN_VERSION:-2.1.0-20260619}
+    image: faun-api:2.1.0-20260619
     container_name: faun-api
     restart: unless-stopped
     ports:
-      # host:container — 8010 выбран, чтобы не конфликтовать с v1-демо.
-      - "8010:8010"
+      # tailnet-only bind как в проде (НЕ 0.0.0.0): порт виден только в tailnet.
+      - "100.64.0.1:8010:8010"
     environment:
       # Каталог job-ов внутри контейнера = точка монтирования volume.
       FAUN_JOBS_ROOT: /data/jobs
       # Классификатор по умолчанию — Stub (образ TF-free).
       FAUN_CLASSIFIER: stub
+      # Версия в /healthz (совпадает с image-тегом).
+      FAUN_VERSION: ${FAUN_VERSION:-2.1.0-20260619}
+      # Опциональный HTTP Basic Auth — задаётся ИЗ ОКРУЖЕНИЯ, креды НЕ хардкодим.
+      # Обе пустые -> сайт открыт (default-open); обе заданы -> логин на всё, кроме /healthz.
+      FAUN_BASIC_USER: ${FAUN_BASIC_USER:-}
+      FAUN_BASIC_PASS: ${FAUN_BASIC_PASS:-}
     volumes:
-      # Персистентные результаты job-ов переживают пересоздание контейнера.
-      - faun-jobs:/data/jobs
+      # Персистентные результаты job-ов (имя тома = прод faun-v2-jobs).
+      - faun-v2-jobs:/data/jobs
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8010/healthz"]
       interval: 30s
@@ -31,4 +41,4 @@ services:
       start_period: 10s
 
 volumes:
-  faun-jobs:
+  faun-v2-jobs:

@@ -19,8 +19,10 @@ from pathlib import Path  # noqa: F401 — re-exported for test monkeypatch of P
 
 from faun.settings import get_settings
 
-#: Версия сервиса для health-payload (release candidate v2).
-FAUN_VERSION = "2.0.0-rc"
+#: Версия сервиса для health-payload. Берётся из env ``FAUN_VERSION`` (деплой
+#: передаёт билд-тег через ``--build-arg``/``-e``), дефолт — release candidate.
+#: Так ``/healthz`` отражает реально задеплоенный образ (health-gate сверяет тег).
+FAUN_VERSION = os.environ.get("FAUN_VERSION", "2.0.0-rc")
 
 #: Имя сервиса в payload — совпадает с title FastAPI-app.
 SERVICE_NAME = "faun-api"

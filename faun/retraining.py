@@ -280,6 +280,23 @@ def species_eval(clf, X, y, *, synthetic: bool = True) -> dict:
             "(YamnetEmbedder=2048 vs YAMNetAdapter.embed=1024). See docs/training.md."
         )
 
+    # Гейт словаря (как dim-guard, но по классам): если у пробы есть classes_ и
+    # НИ ОДИН вид eval-набора в него не входит — это почти наверняка чужая проба/
+    # датасет, recall был бы тождественным нулём и «честным» молчанием. Падаем
+    # явно ТОЛЬКО при ПОЛНОМ непересечении; частичное пересечение легитимно
+    # (новые виды на eval допустимы).
+    clf_classes = getattr(clf, "classes_", None)
+    if clf_classes is not None and len(clf_classes) and len(y):
+        eval_species = set(map(str, np.asarray(y).tolist()))
+        probe_species = set(map(str, np.asarray(clf_classes).tolist()))
+        if eval_species.isdisjoint(probe_species):
+            raise ValueError(
+                "probe vocabulary is disjoint from the eval labels "
+                f"(probe {sorted(probe_species)[:3]}… vs eval "
+                f"{sorted(eval_species)[:3]}…) — train and eval must use the SAME "
+                "dataset vocabulary."
+            )
+
     y_pred = clf.predict(X)
 
     recalls = recall_score(y, y_pred, labels=labels, average=None, zero_division=0)

@@ -125,3 +125,27 @@ def test_species_eval_rejects_dim_mismatch():
     X_wrong = np.zeros((len(y), 8), dtype=float)  # 8 != 4
     with pytest.raises(ValueError, match="same embedder|expects 4-dim"):
         retraining.species_eval(clf, X_wrong, y, synthetic=True)
+
+
+def test_species_eval_synthetic_provenance_invariant():
+    """Гейт честности (инвариант): synthetic=True ВСЕГДА даёт provenance=SYNTHETIC."""
+    for seed in (1, 2, 3):
+        X, y = _clustered_dataset(n_classes=3, per_class=20, dim=8, seed=seed)
+        clf = train_probe(X, y, seed=42)
+        report = retraining.species_eval(clf, X, y, synthetic=True)
+        assert report["provenance"] == SYNTHETIC_TAG
+
+
+def test_species_eval_rejects_disjoint_vocabulary():
+    """Гейт словаря: классы пробы полностью не пересекаются с метками eval -> ValueError.
+
+    DIM совпадает (8), поэтому dim-guard проходит; падаем именно на словаре.
+    """
+    import pytest
+
+    X, y = _clustered_dataset(n_classes=2, per_class=20, dim=8, seed=7)
+    clf = train_probe(X, y, seed=42)  # classes_ == species_0 / species_1
+    half = len(y) // 2
+    y_other = np.asarray(["ghost_a"] * half + ["ghost_b"] * (len(y) - half))
+    with pytest.raises(ValueError, match="disjoint"):
+        retraining.species_eval(clf, X, y_other, synthetic=True)

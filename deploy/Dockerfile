@@ -8,7 +8,15 @@
 # Сборка СТЕЙДЖ: локально docker не гоняется, образ собирается вручную утром/в
 # июле на целевом хосте (см. deploy/README.md).
 
-FROM python:3.12-slim
+# База пиннится по digest (воспроизводимый билд). Разрезолвлено 2026-06-19 —
+# python:3.12-slim linux/amd64. Тег мутабелен (Debian-пересборки), digest — нет.
+FROM python:3.12-slim@sha256:c2d8472b831337ab296a8ce652e1ba786e9e3034fc445dc58b50a7f5251f0003
+
+# Build-time версия -> в образ, чтобы /healthz отражал тег билда (blue-green
+# health-gate сверяет version == задеплоенный тег). Передаётся через
+# `docker build --build-arg FAUN_VERSION=<tag>`; дефолт dev для локальных сборок.
+ARG FAUN_VERSION=dev
+ENV FAUN_VERSION=$FAUN_VERSION
 
 # Без .pyc и с небуферизованным stdout — чистые логи в контейнере.
 ENV PYTHONDONTWRITEBYTECODE=1 \

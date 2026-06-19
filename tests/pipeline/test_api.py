@@ -468,3 +468,70 @@ def test_p0_resolve_failure_marks_job_error_not_500(client):
     assert body["status"] == "error"
     assert body.get("error_kind") == "ssrf"
     assert "error" in body
+
+
+# ---------------------------------------------------------------------------
+# B1 disk-leak: the downloaded/extracted REMOTE source tree is cleaned up
+# ---------------------------------------------------------------------------
+
+
+def test_remote_source_dir_cleaned_after_job(client, tmp_path, monkeypatch):
+    """A remote (downloaded+extracted) source tree is removed after the job.
+
+    job_dir/_source must NOT survive, while the real outputs (results.csv + the
+    segment clips) remain. Same mocked-httpx Yandex path as the P0 e2e test.
+    """
+    import faun.sources as sources
+
+    zip_bytes = _zip_tree_bytes(_FIXTURES / "traps_mini")
+    _patch_public_dns(monkeypatch)
+    monkeypatch.setattr(
+        sources.httpx, "Client", lambda **kw: _FakeYandexClient(zip_bytes, **kw)
+    )
+
+    resp = client.post("/jobs", json={"url": "https://disk.yandex.ru/d/CLEANUP"})
+    job_id = resp.json()["job_id"]
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "done"
+
+    job_dir = tmp_path / "jobs" / job_id
+    assert not (job_dir / "_source").exists(), "remote _source tree must be cleaned up"
+    assert (job_dir / "results.csv").exists()
+    assert list((job_dir / "segments").glob("*.wav")), "clips must survive cleanup"
+
+
+def test_local_source_not_deleted_by_pipeline(client, tmp_path):
+    """A LOCAL pass-through source (outside job_dir) is never touched by cleanup."""
+    resp = client.post("/jobs", json={"source_path": str(_FIXTURES / "traps_mini")})
+    job_id = resp.json()["job_id"]
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "done"
+    # The committed fixture dir must remain intact (cleanup only removes _source).
+    assert (_FIXTURES / "traps_mini").is_dir()
+    assert not (tmp_path / "jobs" / job_id / "_source").exists()
+
+
+# ---------------------------------------------------------------------------
+# B3 input validation: lat/lon bounds + label length (422, never poisoned data)
+# ---------------------------------------------------------------------------
+
+
+def test_job_rejects_out_of_range_lat(client):
+    resp = client.post("/jobs", json={"source_path": "/data/A1", "lat": 200.0})
+    assert resp.status_code == 422
+
+
+def test_jobrequest_rejects_non_finite_coords():
+    """JobRequest rejects NaN / +-Inf coords at the model level (the real gate).
+
+    Tested on the model rather than over HTTP: a standards-compliant JSON client
+    cannot even encode NaN, and FastAPI's own 422 body can't serialise it either.
+    The bound check stops a non-finite coordinate from poisoning results_meta.json.
+    """
+    from pydantic import ValidationError
+
+    from faun.api import JobRequest
+
+    for bad in (float("nan"), float("inf"), float("-inf"), 200.0, -100.0):
+        with pytest.raises(ValidationError):
+            JobRequest(source_path="/data/A1", lat=bad)
+    # A valid in-range coordinate still constructs fine.
+    assert JobRequest(source_path="/data/A1", lat=58.1, lon=45.2).lat == 58.1
