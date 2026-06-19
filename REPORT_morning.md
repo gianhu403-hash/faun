@@ -1,6 +1,6 @@
 # Утренний отчёт — ночь 2026-06-19→20: масштаб видовой метрики · проба-в-прод (гейт) · raw180-review · fine-tune
 
-**Дата:** 2026-06-19 · **Ветка:** `feat/perch2-followups` (от `main` `8ac7dee`) → смёржена в `main`.
+**Дата:** 2026-06-19 · **Ветка:** `feat/perch2-followups` (от `main` `8ac7dee`) → сводится в `main` этим closeout'ом (`--no-ff`, push под gianhu403-hash).
 
 ## Вердикт (сначала вывод)
 
@@ -9,7 +9,7 @@
 Но главный результат не в цифре, а в **честном гейте**: дообученная проба НЕ превосходит уже
 задеплоенный zero-shot Perch 2 (0.8340 vs 0.8341 на одних и тех же 50 видах), поэтому **пробу в прод
 НЕ выкатили** — это защитило заказчика от регресса покрытия. На проде создана **review-очередь raw180**
-(42 реальные детекции, готова орнитологу). Fine-tune — честный BLOCKED (GPU занят демо v1). Всё в `main`,
+(42 реальные детекции, готова орнитологу). Fine-tune — честный BLOCKED (GPU занят демо v1). Всё сводится в `main` этим closeout'ом,
 тесты зелёные (**538 passed / 2 skipped**), прод не тронут (auth ON, zero-shot perch-v2), демо v1 живо.
 
 ---
@@ -68,8 +68,8 @@ torch/TF (`import faun.api`/`faun.cli` чисты); frozen-сигнатуры ц
 
 ## Состояние кода и артефакты
 
-- Ветка `feat/perch2-followups`: `f70e411` (V1 extract+eval+тест), `29dc045` (audit-hardening) →
-  смёржено в `main` (`--no-ff`), push под gianhu403-hash.
+- Ветка `feat/perch2-followups`: `f70e411` (V1 extract+eval+тест), `29dc045` (audit-hardening),
+  `09a1b9d` (docs) → этим closeout'ом сводится в `main` (`--no-ff`, push под gianhu403-hash).
 - **538 passed / 2 skipped**; bandit 0 HIGH; module-level TF/torch — нет; frozen целы; секрет-скан диффа чист.
 - Прод `faun-api:2.2.0-ml-20260619` (perch-v2 zero-shot, auth ON) — **НЕ тронут** (3ч+ uptime, healthy).
 - Кластер: `reserve_subset/` (50 видов × 80 = 4000 клипов), `reserve_probe.pkl` (50 биномиальных
