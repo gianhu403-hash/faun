@@ -177,3 +177,38 @@ class PerchProbeAdapter(probe=None, probe_path=None, model_path=None, labels=Non
 #   (the Perch2Adapter._infer delegate). Defaults FAUN_CLASSIFIER=perch-v2 + PERCH_V2_MODEL_PATH=
 #   /models/perch2 (model in a volume, not the image). slim deploy/Dockerfile stays TF-free = rollback.
 ```
+
+## v6 additions — regional mask, presence aggregate, probability calibration (ADDITIVE)
+
+Added by the Wave-1 (ADR-0004) and FR-006 (ADR-0005) waves. Every FROZEN signature
+above is unchanged; CSV columns stay frozen — new data is sidecar / env / status only.
+
+```python
+# faun/classification (ADR-0004): regional species allow-list wrapper.
+class MaskedClassifier(inner, allowlist, *, vocab_provider=None, coverage_floor=0.5)
+#   classify(segment, sr)->list[Prediction]: drops predictions whose species is not on
+#     the allow-list (case-insensitive, underscore-tolerant via _species_key/_binomial);
+#     logs masked_out=<species>. Fail-open coverage gate: if < coverage_floor of the
+#     allow-list matches the classifier's own vocabulary (vocab_provider), the mask
+#     DISABLES itself (no-op) instead of emptying the output. exposes .inner for unwrap.
+def load_allowlist(spec)->list[str]   # path | "default"/"reserve" sentinel | None->[]; fail-open
+RESERVE_CHECKLIST_PATH                 # bundled faun/data/reserve_checklist.txt (69 species)
+# faun/settings: + species_allowlist (FAUN_SPECIES_ALLOWLIST). Unset -> mask OFF (prod unchanged).
+# faun/api: _build_classifier wraps the base classifier in MaskedClassifier when set;
+#   _classifier_source unwraps .inner so detection provenance stays the real backbone.
+
+# faun/output (ADR-0004): per-trap, per-day species presence aggregate (sidecar).
+def species_presence(detections)->dict           # {pipeline_version, attribution, groups:[{trap_id,
+#   day, n_detections, species:[{species, detections, max_probability, mean_probability}]}]}
+#   best-label-per-detection (human ground-truth wins); group n_detections sum == detections.jsonl lines.
+def write_species_presence(path, detections)->Path  # atomic; run_pipeline writes species_presence.json.
+
+# faun/retraining (ADR-0005): probability calibration (temperature scaling). numpy/scipy, TF-free.
+class TemperatureCalibrator(temperature=1.0, classes=None)   # apply(logits)->softmax(logits/T)
+def fit_temperature(logits, y, *, classes=None, bounds=(0.05,100.0))->TemperatureCalibrator  # NLL min; T=1 fallback
+def apply_calibration(calibrator, logits)->np.ndarray        # identity pass-through when calibrator is None
+def expected_calibration_error(probs, y_true, *, classes=None, n_bins=15)->float  # top-1 ECE
+# faun/detections: + STATUS_REJECTED = "rejected" (model abstain; never ground truth);
+#   + Label.prob_calibrated: float|None (detections.jsonl sidecar ONLY, never a CSV column; raw
+#   probability untouched). to_dict/from_dict additive; pre-FR-006 records load with None.
+```

@@ -38,6 +38,7 @@ __all__ = [
     "STATUS_PSEUDO",
     "STATUS_CONFIRMED",
     "STATUS_CORRECTED",
+    "STATUS_REJECTED",
     "TRAINING_EXCLUDED_SOURCES",
     "Label",
     "Detection",
@@ -63,6 +64,11 @@ SOURCE_RANGER = "operator:ranger"
 STATUS_PSEUDO = "pseudo"
 STATUS_CONFIRMED = "confirmed"
 STATUS_CORRECTED = "corrected"
+#: Model abstain / negative-class outcome (below-threshold or "not a bird",
+#: FR-006). Distinct from the human pseudo/confirmed/corrected lifecycle and
+#: NEVER ground truth — deliberately not the StubAdapter's "unknown" species
+#: token, which is a species name, not a lifecycle status.
+STATUS_REJECTED = "rejected"
 
 #: Status values that, combined with a human source, mark a label ground truth.
 _GROUND_TRUTH_STATUSES = frozenset({STATUS_CONFIRMED, STATUS_CORRECTED})
@@ -90,6 +96,11 @@ class Label:
     source: str
     status: str
     ts: str
+    #: Optional calibrated probability in [0, 1] (FR-006, ADR-0005). The raw
+    #: ``probability`` is left untouched; this travels only in the
+    #: detections.jsonl sidecar (never a CSV column). ``None`` until a calibrator
+    #: is fit and applied.
+    prob_calibrated: float | None = None
 
     @classmethod
     def now(
@@ -98,6 +109,7 @@ class Label:
         probability: float | None,
         source: str,
         status: str,
+        prob_calibrated: float | None = None,
     ) -> "Label":
         """Create a label stamped with the current UTC time (ISO-8601)."""
         return cls(
@@ -106,6 +118,7 @@ class Label:
             source=source,
             status=status,
             ts=_utcnow(),
+            prob_calibrated=prob_calibrated,
         )
 
     @classmethod
@@ -130,6 +143,7 @@ class Label:
             "source": self.source,
             "status": self.status,
             "ts": self.ts,
+            "prob_calibrated": self.prob_calibrated,
         }
 
     @classmethod
@@ -140,6 +154,8 @@ class Label:
             source=data["source"],
             status=data["status"],
             ts=data["ts"],
+            # Back-compat: detections.jsonl written before FR-006 has no field.
+            prob_calibrated=data.get("prob_calibrated"),
         )
 
 
