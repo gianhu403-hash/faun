@@ -44,6 +44,8 @@ Defaults (match the values faun.sources actually enforces):
     yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
     perch_v2_probe_path       ``None``        (PERCH_V2_PROBE_PATH)
     species_allowlist         ``None``        (FAUN_SPECIES_ALLOWLIST)
+    presence_gate_k           ``0.0``         (FAUN_PRESENCE_GATE_K)
+    perch_v2_calibrator_path  ``None``        (PERCH_V2_CALIBRATOR_PATH)
     prob_smoothing            ``False``       (FAUN_PROB_SMOOTHING)
 """
 
@@ -214,6 +216,18 @@ class Settings:
     basic_user: str | None = None
     basic_pass: str | None = None
 
+    # Presence soft-gate strength (FR-003, ADR-0007). k=0 (default) is a literal
+    # no-op: Perch2Adapter returns the raw logit in `probability`, unchanged. Only
+    # k>0 activates the gate `clamp01(p_species·(1+p_bird·k))` over softmax probs,
+    # so the served probability changes ONLY when explicitly enabled. Parsed with
+    # positive=False — 0 is the valid OFF value, NOT a rejected non-positive.
+    presence_gate_k: float = 0.0
+
+    # Serve-time probability calibrator (FR-006-serve, ADR-0007). Path to a pickled
+    # TemperatureCalibrator; unset -> Prediction.prob_calibrated stays None and the
+    # output is unchanged. Like the probe paths: an operator-supplied local pickle.
+    perch_v2_calibrator_path: str | None = None
+
     # Per-recording probability smoothing sidecar (FR-004, ADR-0006). OFF by
     # default: when False, run_pipeline writes no prob_smoothed.json and the job
     # directory is byte-for-byte what it was before. Output-only — the raw
@@ -256,6 +270,9 @@ class Settings:
             species_allowlist=_env_path_opt("FAUN_SPECIES_ALLOWLIST"),
             basic_user=_env_secret_opt("FAUN_BASIC_USER"),
             basic_pass=_env_secret_opt("FAUN_BASIC_PASS"),
+            # positive=False: k=0 is the valid OFF value, not a rejected non-positive.
+            presence_gate_k=_env_float("FAUN_PRESENCE_GATE_K", 0.0, positive=False),
+            perch_v2_calibrator_path=_env_path_opt("PERCH_V2_CALIBRATOR_PATH"),
             prob_smoothing=_env_bool("FAUN_PROB_SMOOTHING", False),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
         )

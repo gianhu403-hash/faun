@@ -57,10 +57,19 @@ def __dir__() -> list[str]:
 
 @dataclass
 class Prediction:
-    """A single species prediction for an audio segment."""
+    """A single species prediction for an audio segment.
+
+    ``probability`` carries the model's own score (a raw logit for the Perch 2
+    zero-shot path). ``prob_calibrated`` is an OPTIONAL, additive calibrated
+    probability in [0, 1] (FR-006-serve, ADR-0007): ``None`` unless a calibrator
+    is configured, sidecar-only (it never becomes a CSV column), and the raw
+    ``probability`` is never overwritten. The default keeps every existing
+    two-argument ``Prediction(species, probability)`` call back-compatible.
+    """
 
     species: str
     probability: float
+    prob_calibrated: float | None = None
 
 
 @runtime_checkable

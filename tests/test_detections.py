@@ -176,6 +176,22 @@ def test_from_prediction_status_override() -> None:
     assert is_ground_truth(label) is True
 
 
+def test_from_prediction_threads_prob_calibrated() -> None:
+    """FR-006-serve: a Prediction's calibrated prob flows into the label sidecar.
+
+    Raw probability stays the model's own score; prob_calibrated rides alongside.
+    """
+    pred = Prediction(species="Turdus merula", probability=13.27, prob_calibrated=0.82)
+    label = Label.from_prediction(pred, SOURCE_PERCH)
+    assert label.probability == 13.27  # raw score untouched
+    assert label.prob_calibrated == 0.82
+
+
+def test_from_prediction_prob_calibrated_defaults_none() -> None:
+    pred = Prediction(species="Parus major", probability=0.5)
+    assert Label.from_prediction(pred, SOURCE_PERCH).prob_calibrated is None
+
+
 # ---------------------------------------------------------------------------
 # FR-006: rejected status + prob_calibrated sidecar field (ADR-0005)
 # ---------------------------------------------------------------------------
