@@ -391,3 +391,139 @@ def test_fit_temperature_with_string_classes() -> None:
 def test_fit_temperature_rejects_non_2d_logits() -> None:
     with pytest.raises(ValueError, match="2-D"):
         retraining.fit_temperature(np.array([1.0, 2.0, 3.0]), [0, 1, 2])
+
+
+# ---------------------------------------------------------------------------
+# FR-007: prototypical probe with a negative (background) class (ADR-0008)
+# ---------------------------------------------------------------------------
+
+
+def _clustered_embeddings(seed: int = 0, *, dim: int = 1536, per: int = 12):
+    """Three bird clusters + one well-separated negative cluster in ``dim``-d.
+
+    Returns ``(X, y, negatives, centers)`` where ``centers`` are the cluster
+    means (``centers[:3]`` birds ``sp0/sp1/sp2``, ``centers[3]`` the negative).
+    """
+    rng = np.random.default_rng(seed)
+    centers = rng.standard_normal((4, dim)) * 6.0
+
+    def cloud(c, n):
+        return c + 0.05 * rng.standard_normal((n, dim))
+
+    parts = [cloud(centers[i], per) for i in range(3)]
+    X = np.vstack(parts)
+    y = np.array(sum(([f"sp{i}"] * per for i in range(3)), []))
+    negatives = cloud(centers[3], per)
+    return X, y, negatives, centers
+
+
+def test_prototype_probe_proba_shape_sums_and_classes() -> None:
+    X, y, negatives, _ = _clustered_embeddings(seed=0)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+
+    # classes_ = the 3 birds + the negative bucket, columns aligned to it.
+    assert list(probe.classes_) == ["sp0", "sp1", "sp2", retraining.NEGATIVE_CLASS]
+
+    proba = probe.predict_proba(X[:7])
+    assert proba.shape == (7, 4)
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    assert proba.min() >= 0.0 and proba.max() <= 1.0
+
+
+def test_prototype_probe_centroid_classifies_to_its_class() -> None:
+    X, y, negatives, centers = _clustered_embeddings(seed=1)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+    # A query AT each bird centroid -> that bird (column order == classes_).
+    for i in range(3):
+        assert probe.predict(centers[i][np.newaxis, :])[0] == f"sp{i}"
+
+
+def test_prototype_probe_negative_class_catches_ood() -> None:
+    """OOD embedding near the negative prototype -> NEGATIVE_CLASS, not a bird."""
+    X, y, negatives, centers = _clustered_embeddings(seed=2)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+
+    rng = np.random.default_rng(99)
+    ood = centers[3] + 0.05 * rng.standard_normal(centers.shape[1])
+    pred = probe.predict(ood[np.newaxis, :])[0]
+    assert pred == retraining.NEGATIVE_CLASS
+
+    proba = probe.predict_proba(ood[np.newaxis, :])[0]
+    neg_col = list(probe.classes_).index(retraining.NEGATIVE_CLASS)
+    assert int(np.argmax(proba)) == neg_col
+
+
+def test_prototype_probe_without_negatives_is_plain_multiclass() -> None:
+    X, y, _negatives, _ = _clustered_embeddings(seed=3)
+    probe = retraining.train_prototype_probe(X, y)  # negatives=None
+    assert retraining.NEGATIVE_CLASS not in list(probe.classes_)
+    assert list(probe.classes_) == ["sp0", "sp1", "sp2"]
+    assert probe.predict_proba(X[:4]).shape == (4, 3)
+
+
+def test_prototype_probe_is_dimension_agnostic() -> None:
+    """The trainer must work for a small synthetic dim, not just Perch 2's 1536."""
+    X, y, negatives, centers = _clustered_embeddings(seed=4, dim=8, per=6)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+    assert probe.n_features_in_ == 8
+    assert probe.predict(centers[0][np.newaxis, :])[0] == "sp0"
+    assert probe.predict(centers[3][np.newaxis, :])[0] == retraining.NEGATIVE_CLASS
+
+
+def test_prototype_probe_is_deterministic() -> None:
+    X, y, negatives, _ = _clustered_embeddings(seed=5)
+    a = retraining.train_prototype_probe(X, y, negatives=negatives)
+    b = retraining.train_prototype_probe(X, y, negatives=negatives)
+    assert np.array_equal(a.classes_, b.classes_)
+    assert np.allclose(a.prototypes_, b.prototypes_)
+    assert np.allclose(a.predict_proba(X), b.predict_proba(X))
+
+
+def test_prototype_probe_euclidean_metric_also_works() -> None:
+    X, y, negatives, centers = _clustered_embeddings(seed=6)
+    probe = retraining.train_prototype_probe(
+        X, y, negatives=negatives, metric="euclidean"
+    )
+    proba = probe.predict_proba(X[:5])
+    assert np.allclose(proba.sum(axis=1), 1.0)
+    assert probe.predict(centers[2][np.newaxis, :])[0] == "sp2"
+
+
+def test_prototype_probe_rejects_bad_metric_and_mismatched_negatives() -> None:
+    X, y, _negatives, _ = _clustered_embeddings(seed=7, dim=8, per=5)
+    with pytest.raises(ValueError, match="cosine.*euclidean"):
+        retraining.train_prototype_probe(X, y, metric="manhattan")
+    # negatives with the wrong feature dim are rejected (would corrupt centroids).
+    bad_neg = np.zeros((5, 9))
+    with pytest.raises(ValueError, match="negatives must be"):
+        retraining.train_prototype_probe(X, y, negatives=bad_neg)
+
+
+def test_prototype_probe_save_load_round_trip(tmp_path) -> None:
+    """SC-D1: save_probe -> load_probe preserves predict_proba / classes_."""
+    X, y, negatives, _ = _clustered_embeddings(seed=8)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+
+    out = tmp_path / "prototype_probe.pkl"
+    retraining.save_probe(probe, out)
+    loaded = retraining.load_probe(out)
+
+    assert np.array_equal(loaded.classes_, probe.classes_)
+    assert np.allclose(loaded.predict_proba(X), probe.predict_proba(X))
+    assert np.array_equal(loaded.predict(X), probe.predict(X))
+
+
+def test_prototype_probe_loads_via_yamnet_adapter(tmp_path) -> None:
+    """The pickle is loadable by YAMNetAdapter (predict_proba/classes_ path)."""
+    X, y, negatives, _ = _clustered_embeddings(seed=9)
+    probe = retraining.train_prototype_probe(X, y, negatives=negatives)
+    out = tmp_path / "probe.pkl"
+    retraining.save_probe(probe, out)
+
+    from faun.classification.yamnet import YAMNetAdapter
+
+    adapter = YAMNetAdapter(probe_path=str(out))
+    loaded = adapter._load_probe()
+    assert loaded is not None
+    assert hasattr(loaded, "predict_proba")
+    assert retraining.NEGATIVE_CLASS in list(loaded.classes_)

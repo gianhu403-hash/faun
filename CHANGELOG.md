@@ -9,6 +9,49 @@ the git log and `~/.claude` project memory.
 
 ## [Unreleased]
 
+### Wave 4 — prototypical probe with a negative (background) class (ADR-0008)
+
+A new probe trainer beside `train_probe_cv` that gives the **probe** path an
+explicit "none of the birds" outcome on out-of-distribution (non-bird / noise)
+audio. The existing LogReg trainer, the served `PerchProbeAdapter`, and the
+frozen contract are all **unchanged** — this is purely additive.
+
+#### Added
+- **Prototypical probe (FR-007).** `faun.retraining.train_prototype_probe(X, y,
+  *, negatives=None, metric="cosine", temperature=1.0)` returns a small picklable
+  `_PrototypeProbe`: one centroid per class, `predict_proba` = softmax over
+  per-class similarity logits (rows sum to 1, in `[0, 1]`). Deterministic (no
+  seed, no torch), dimension-agnostic, and a drop-in for the **unchanged**
+  `PerchProbeAdapter` (same `predict_proba` / `classes_` surface; pickles via
+  `save_probe` / `load_probe` and loads through `YAMNetAdapter._load_probe`).
+- **Negative (background) class.** `NEGATIVE_CLASS = "__negative__"` — a distinct
+  *class* the probe predicts (not the `unknown` token, not `STATUS_REJECTED`).
+  When `negatives` (non-bird embeddings) is passed, a dedicated negative prototype
+  is added, so an OOD embedding near it is classified negative instead of a
+  confident bird. `negatives=None` → a plain multiclass prototypical probe.
+- **Head-to-head eval (opt-in, cluster-only).** `scripts/eval_inatsounds_perchv2.py`
+  gains `--prototype` (and `--negatives-from <dir>`): trains the prototype probe
+  on the **same disjoint train split** and reports its held-out macro-F1 next to
+  the LogReg-0.834 baseline on the **same disjoint val** (apples-to-apples; the
+  `#H2` leakage guards are unchanged). Writes `prototype_heldout_macro_f1` into
+  the JSON summary. Without the flag the script's default output is unchanged.
+
+#### Unchanged (guarantees)
+- `train_probe_cv`, `_ConstantProbe`, `save_probe` / `load_probe`, and the served
+  `PerchProbeAdapter` are untouched; no `faun/INTERFACES.md` signature changes.
+- No module-level `import tensorflow` / `import torch` — the probe is pure numpy.
+
+#### Notes
+- The **mechanism** ships here; whether the prototype probe **beats** the 0.834
+  LogReg baseline (SC-D2) is a cluster measurement that is **not** run in this
+  wave (it needs Perch 2 embeddings of iNatSounds + non-bird clips on the
+  cluster). The probe is not wired into production; `train_probe_cv` stays the
+  default trainer.
+- The 0.834 baseline is **iNatSounds held-out macro-F1, not raw180 serving
+  accuracy** — iNat-head-vs-onset domain shift; see
+  `experiments/report/METRICS_HONESTY.md` §10.3–10.4. raw180 species accuracy
+  remains unmeasured.
+
 ### Wave 3 — presence soft-gate + serve-time calibration (ADR-0007)
 
 Two additive signals inside `Perch2Adapter.classify`, both computed from the

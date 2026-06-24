@@ -149,6 +149,171 @@ def _cv_score(X, y, seed: int, metric: str, smallest_class: int):
     return mean, mean - half, mean + half
 
 
+# ---------------------------------------------------------------------------
+# Prototypical probe with a negative (background) class (FR-007, ADR-0008)
+# ---------------------------------------------------------------------------
+#
+# Why this exists: a plain ``LogisticRegression`` / softmax probe over Perch 2
+# embeddings is a CLOSED-WORLD classifier — every input is forced onto one of the
+# trained bird species, so an out-of-distribution embedding (wind, vehicle,
+# silence, an untrained species) maps to a *confident* bird. The served
+# ``PerchProbeAdapter`` would then surface that confident-but-wrong bird.
+#
+# A prototypical probe stores one centroid per class and scores a query by its
+# distance to each centroid (softmax over negative squared distances, or cosine
+# similarity, scaled by a temperature). Adding a distinct NEGATIVE class with its
+# own centroid built from non-bird (background) embeddings gives the probe an
+# explicit "none of the birds" bucket: an OOD embedding near the negative
+# prototype is classified :data:`NEGATIVE_CLASS` instead of a bird.
+#
+# It is a drop-in for the EXISTING ``PerchProbeAdapter`` — it exposes the same
+# ``predict_proba(X) -> (N, C)`` / ``classes_`` surface as the sklearn probes and
+# pickles cleanly (pure numpy state, no closures), so the adapter and
+# ``save_probe`` / ``load_probe`` work UNCHANGED. Deterministic, torch-free.
+
+#: Label of the explicit background / out-of-distribution bucket. Distinct from
+#: the ``"unknown"`` species token (``StubAdapter``) and from ``STATUS_REJECTED``
+#: (a label lifecycle status) — this is a real *class* the probe predicts.
+NEGATIVE_CLASS = "__negative__"
+
+
+class _PrototypeProbe:
+    """Nearest-centroid probe with optional negative class. Picklable, TF-free.
+
+    Stores one prototype (centroid) per class. ``predict_proba`` returns a
+    softmax over per-class similarity logits, so rows sum to 1 and lie in
+    ``[0, 1]`` — the contract ``PerchProbeAdapter`` / ``YAMNetAdapter`` rely on.
+    State is pure numpy (``classes_`` / ``prototypes_`` / scalars), so it pickles
+    without any closure or third-party object.
+
+    Args:
+        metric: ``"cosine"`` (L2-normalize embeddings + prototypes, similarity =
+            dot product) or ``"euclidean"`` (logit = negative squared distance).
+        temperature: positive scalar dividing the similarity logits before
+            softmax (sharper for small ``T``). Non-finite / non-positive values
+            fall back to ``1.0``.
+    """
+
+    def __init__(self, metric: str = "cosine", temperature: float = 1.0) -> None:
+        if metric not in ("cosine", "euclidean"):
+            raise ValueError(f"metric must be 'cosine' or 'euclidean', got {metric!r}")
+        self.metric = metric
+        t = float(temperature)
+        self.temperature = t if (math.isfinite(t) and t > 0) else 1.0
+        self.classes_: np.ndarray = np.array([])
+        self.prototypes_: np.ndarray = np.zeros((0, 0), dtype=np.float64)
+        self.n_features_in_: int | None = None
+
+    @staticmethod
+    def _l2_normalize(mat: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        norms = np.where(norms > 0.0, norms, 1.0)  # leave all-zero rows untouched
+        return mat / norms
+
+    def fit(self, X, y, *, negatives=None) -> "_PrototypeProbe":
+        """Build per-class centroids from ``(X, y)`` (+ optional ``negatives``).
+
+        ``negatives`` (``(M, D)`` non-bird embeddings) get their own centroid
+        under the :data:`NEGATIVE_CLASS` label. Classes are sorted so the column
+        order is deterministic and matches ``classes_``.
+        """
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y)
+        if X.ndim != 2:
+            raise ValueError(f"X must be 2-D (N, D); got shape {X.shape}")
+        if len(X) != len(y):
+            raise ValueError(f"X has {len(X)} rows but y has {len(y)} labels")
+        if len(X) == 0:
+            raise ValueError("cannot fit a prototype probe on an empty X")
+
+        self.n_features_in_ = int(X.shape[1])
+
+        labels = sorted({str(v) for v in y.tolist()})
+        centroids = [
+            X[np.asarray([str(v) for v in y.tolist()]) == lbl].mean(axis=0)
+            for lbl in labels
+        ]
+
+        if negatives is not None:
+            neg = np.asarray(negatives, dtype=np.float64)
+            if neg.ndim != 2 or neg.shape[1] != self.n_features_in_:
+                raise ValueError(
+                    f"negatives must be (M, {self.n_features_in_}) to match X; "
+                    f"got shape {neg.shape}"
+                )
+            if len(neg) == 0:
+                raise ValueError("negatives given but empty; pass None for no negative")
+            labels.append(NEGATIVE_CLASS)
+            centroids.append(neg.mean(axis=0))
+
+        self.classes_ = np.array(labels)
+        prototypes = np.stack(centroids).astype(np.float64)
+        if self.metric == "cosine":
+            prototypes = self._l2_normalize(prototypes)
+        self.prototypes_ = prototypes
+        return self
+
+    def _logits(self, X) -> np.ndarray:
+        X = np.asarray(X, dtype=np.float64)
+        if X.ndim == 1:
+            X = X[np.newaxis, :]
+        if self.prototypes_.shape[0] == 0:
+            raise RuntimeError("probe is not fitted (no prototypes)")
+        if self.metric == "cosine":
+            sims = self._l2_normalize(X) @ self.prototypes_.T  # cosine in [-1, 1]
+        else:
+            # -||x - c||^2 = 2 x·c - ||x||^2 - ||c||^2 ; the per-row ||x||^2 is a
+            # constant shift that softmax cancels, so only 2 x·c - ||c||^2 matters.
+            xc = X @ self.prototypes_.T
+            cc = np.sum(self.prototypes_**2, axis=1)
+            sims = 2.0 * xc - cc[np.newaxis, :]
+        return sims / self.temperature
+
+    def predict_proba(self, X) -> np.ndarray:
+        """Per-class probabilities ``(N, C)`` (softmax over similarity logits)."""
+        return _softmax(self._logits(X), axis=-1)
+
+    def predict(self, X) -> np.ndarray:
+        """Argmax class label per row (aligned with ``classes_``)."""
+        idx = np.argmax(self._logits(X), axis=1)
+        return self.classes_[idx]
+
+
+def train_prototype_probe(
+    X,
+    y,
+    *,
+    negatives=None,
+    metric: str = "cosine",
+    temperature: float = 1.0,
+):
+    """Fit a :class:`_PrototypeProbe` (per-class centroids) over embeddings.
+
+    A deterministic, torch-free alternative to ``train_probe_cv``'s
+    ``LogisticRegression``: it stores one centroid per class and scores by
+    similarity, so it admits an explicit NEGATIVE class. The returned probe is a
+    drop-in for the UNCHANGED ``PerchProbeAdapter`` (same ``predict_proba`` /
+    ``classes_`` surface, picklable via :func:`save_probe`).
+
+    Args:
+        X: ``(N, D)`` embeddings (dimension-agnostic — works for Perch 2's 1536
+            as well as small synthetic dims).
+        y: length-``N`` species labels.
+        negatives: optional ``(M, D)`` non-bird (background / OOD) embeddings.
+            When given, a distinct :data:`NEGATIVE_CLASS` prototype is added so an
+            OOD embedding near it is classified negative rather than as a
+            confident bird. ``None`` -> a plain multiclass prototypical probe.
+        metric: ``"cosine"`` (default) or ``"euclidean"`` (see :class:`_PrototypeProbe`).
+        temperature: softmax temperature over the similarity logits.
+
+    Returns:
+        A fitted :class:`_PrototypeProbe`.
+    """
+    probe = _PrototypeProbe(metric=metric, temperature=temperature)
+    probe.fit(X, y, negatives=negatives)
+    return probe
+
+
 def save_probe(clf, out_path) -> Path:
     """Pickle ``clf`` to ``out_path`` (sklearn probe; no TF).
 

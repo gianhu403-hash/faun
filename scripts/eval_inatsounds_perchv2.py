@@ -131,6 +131,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=5,
         help="Сколько per-species чисел печатать в человеческий stdout (5).",
     )
+    p.add_argument(
+        "--prototype",
+        action="store_true",
+        help=(
+            "ДОПОЛНИТЕЛЬНО обучить прототипную пробу (FR-007, ADR-0008) на ТОМ ЖЕ "
+            "дизъюнктном train-сплите и напечатать её held-out macro-F1 рядом с "
+            "LogReg-baseline (apples-to-apples на том же val). Аддитивно: дефолт "
+            "скрипта без флага НЕ меняется. Прототипная проба строит per-class "
+            "центроиды; с --negatives-from добавляет негативный класс."
+        ),
+    )
+    p.add_argument(
+        "--negatives-from",
+        default=None,
+        help=(
+            "Только с --prototype: каталог НЕ-птичьих (фоновых) клипов "
+            "(<dir>/<любая_подпапка>/<clip> или <dir>/<clip>) -> эмбеддятся тем же "
+            "Perch 2 как негативный класс прототипной пробы. Без флага — "
+            "прототипная проба обучается БЕЗ негативного класса.",
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -417,6 +438,79 @@ def _gate_comparison(clf, X_val, y_val, val_logits, model_path):
     }
 
 
+def _embed_negatives(neg_root: Path):
+    """Эмбеддить НЕ-птичьи (фоновые) клипы из ``neg_root`` для негативного класса.
+
+    Сканирует ``neg_root`` рекурсивно на ``.wav``/``.flac``/``.ogg``/``.mp3``,
+    применяет ТУ ЖЕ предобработку + peak-norm 0.25, что и тренировочные эмбеддинги
+    (serve-parity), и возвращает ``np.ndarray[M, 1536]`` (или ``None``, если
+    клипов нет). Эмбеддинги фона НЕ кэшируются (одноразовый OOD-набор).
+
+    Это путь FR-007 (ADR-0008): негативный прототип. Запускается только под
+    ``--prototype --negatives-from``; тяжёлый TF тянется лениво.
+    """
+    import soundfile as sf
+
+    from faun import audio
+    import experiments.wrappers.perch_v2 as perch_v2
+
+    exts = {".wav", ".flac", ".ogg", ".mp3"}
+    clips = sorted(p for p in Path(neg_root).rglob("*") if p.suffix.lower() in exts)
+    if not clips:
+        logger.warning("no negative clips under %s; negative class disabled", neg_root)
+        return None
+
+    windows = []
+    for path in clips:
+        wav, sr = sf.read(str(path))
+        mono = audio.downmix(np.asarray(wav, dtype=np.float32))
+        resampled = audio.resample(mono, int(sr), perch_v2.SR)
+        window = audio.fit_window(resampled, perch_v2.WIN_SAMPLES)
+        peak = float(np.max(np.abs(window))) if window.size else 0.0
+        if peak > 0.0:
+            window = (window / peak) * _PERCH2_PEAK
+        windows.append(np.asarray(window, dtype=np.float32))
+
+    batch = np.stack(windows).astype(np.float32)
+    parts = []
+    for i in range(0, len(batch), _EMBED_CHUNK):
+        emb, _logits = perch_v2.embed(batch[i : i + _EMBED_CHUNK])
+        parts.append(np.asarray(emb, dtype=np.float32))
+    embeddings = np.concatenate(parts, axis=0).astype(np.float32)
+    logger.info("embedded %d negative clips -> %s", len(clips), embeddings.shape)
+    return embeddings
+
+
+def _prototype_head_to_head(X_train, y_train, X_val, y_val, *, negatives):
+    """Прототипная проба (FR-007) на ТОМ ЖЕ дизъюнктном сплите -> held-out dict.
+
+    Обучает :func:`faun.retraining.train_prototype_probe` ТОЛЬКО на train
+    (никакой утечки: тот же ``X_train`` LogReg-baseline), затем меряет
+    ``species_eval(synthetic=False)`` на ТОМ ЖЕ ``X_val`` — apples-to-apples с
+    LogReg-числом 0.834. ``negatives`` (или ``None``) добавляет негативный класс.
+
+    Гейт честности: val содержит только птиц (iNatSounds), поэтому негативный
+    класс на held-out НЕ оценивается — это OOD-механизм, а не довесок к macro-F1.
+    Возвращает ``dict`` с ``prototype_heldout_macro_f1`` /
+    ``prototype_heldout_accuracy`` / ``prototype_has_negative_class``.
+    """
+    from sklearn.metrics import accuracy_score
+
+    from faun.retraining import NEGATIVE_CLASS, species_eval, train_prototype_probe
+
+    proto = train_prototype_probe(X_train, y_train, negatives=negatives)
+    report = species_eval(proto, X_val, y_val, synthetic=False)
+    macro_f1 = float(report["macro_f1"])
+    accuracy = float(accuracy_score(np.asarray(y_val), proto.predict(X_val)))
+    has_neg = NEGATIVE_CLASS in [str(c) for c in proto.classes_]
+    return {
+        "prototype_heldout_macro_f1": macro_f1,
+        "prototype_heldout_accuracy": accuracy,
+        "prototype_has_negative_class": bool(has_neg),
+        "prototype_n_classes": int(len(proto.classes_)),
+    }
+
+
 def _coerce(value):
     """numpy-скаляры -> питоновские float/int для json.dump."""
     if isinstance(value, np.floating):
@@ -499,6 +593,26 @@ def main(argv: list[str] | None = None) -> int:
     worst = sorted(report["per_species_recall"].items(), key=lambda kv: kv[1])
     for sp, rec in worst[: args.top_k]:
         print(f"  {sp}: {rec:.3f}")
+
+    # -- 4b. ОПЦ. прототипная проба head-to-head на ТОМ ЖЕ val (FR-007) ------
+    # Аддитивно: без --prototype этот блок не выполняется и дефолт скрипта не
+    # меняется. С флагом обучаем прототипную пробу на ТОМ ЖЕ X_train (нет утечки)
+    # и меряем held-out macro-F1 на ТОМ ЖЕ X_val — apples-to-apples с LogReg-0.834.
+    prototype = None
+    if args.prototype:
+        negatives = None
+        if args.negatives_from:
+            negatives = _embed_negatives(Path(args.negatives_from))
+        prototype = _prototype_head_to_head(
+            X_train, y_train, X_val, y_val, negatives=negatives
+        )
+        print(
+            "prototype probe (FR-007, same disjoint val) HELD-OUT: "
+            f"macro_f1={prototype['prototype_heldout_macro_f1']:.4f} "
+            f"accuracy={prototype['prototype_heldout_accuracy']:.4f} "
+            f"negative_class={prototype['prototype_has_negative_class']} "
+            f"(LogReg baseline above = {heldout_macro_f1:.4f})"
+        )
 
     # -- 5. zero-shot baseline на ТОМ ЖЕ val (#H2, #H6) ----------------------
     import os
@@ -587,6 +701,16 @@ def main(argv: list[str] | None = None) -> int:
         "probe_classes": deployed_species,
         "measured_species": measured_species,
         "unmeasured_deployed_species": unmeasured,
+        # FR-007 (ADR-0008) head-to-head — None when --prototype not passed.
+        "prototype_heldout_macro_f1": (
+            None if prototype is None else prototype["prototype_heldout_macro_f1"]
+        ),
+        "prototype_heldout_accuracy": (
+            None if prototype is None else prototype["prototype_heldout_accuracy"]
+        ),
+        "prototype_has_negative_class": (
+            None if prototype is None else prototype["prototype_has_negative_class"]
+        ),
         "provenance": "real-eval",
         "probe_out": str(probe_out),
         "note": (
