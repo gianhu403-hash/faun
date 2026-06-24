@@ -68,11 +68,14 @@ frozen contract are all **unchanged** — this is purely additive.
 - No module-level `import tensorflow` / `import torch` — the probe is pure numpy.
 
 #### Notes
-- The **mechanism** ships here; whether the prototype probe **beats** the 0.834
-  LogReg baseline (SC-D2) is a cluster measurement that is **not** run in this
-  wave (it needs Perch 2 embeddings of iNatSounds + non-bird clips on the
-  cluster). The probe is not wired into production; `train_probe_cv` stays the
-  default trainer.
+- The **mechanism** ships here. A post-merge cluster validation (best-effort, NOT
+  a gate) over the disjoint reserve embeddings measured it: prototype macro-F1
+  **0.8434** vs LogReg baseline **0.834** on the same 50-species held-out — the
+  prototype **beats** the baseline by ~0.9 pts; calibration ECE **0.0431 →
+  0.0330** (T≈0.83). **This does not change the deployment decision:** these are
+  iNatSounds reserve embeddings (not raw180 serving accuracy), and a 50-species
+  probe still loses ~14745-class zero-shot coverage. The probe is **not** wired
+  into production; `train_probe_cv` stays the default trainer.
 - The 0.834 baseline is **iNatSounds held-out macro-F1, not raw180 serving
   accuracy** — iNat-head-vs-onset domain shift; see
   `experiments/report/METRICS_HONESTY.md` §10.3–10.4. raw180 species accuracy

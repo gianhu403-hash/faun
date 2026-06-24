@@ -106,14 +106,28 @@ Positive:
 - The head-to-head is honest and apples-to-apples: same disjoint split, same val,
   same caveats as the LogReg number.
 
+Validation (post-merge, cluster, best-effort — NOT a merge gate):
+
+- A throwaway container over the disjoint reserve embedding cache (3200 train /
+  800 held-out val, 50 species) measured the prototype probe head-to-head against
+  the LogReg baseline (`real-eval`): LogReg macro-F1 **0.834** (reproduces the
+  established figure exactly), **prototype macro-F1 0.8434** (accuracy 0.8425) —
+  the prototype **beats** the LogReg baseline by ~0.9 points on the same val.
+  Calibration on the same set: ECE **0.0431 → 0.0330** (T≈0.83), validating the
+  merged `TemperatureCalibrator` / `expected_calibration_error`.
+- **This does NOT change the deployment decision.** The numbers are iNatSounds
+  reserve embeddings (whole-clip), **not** raw180 serving accuracy (domain shift,
+  below). And a 50-species probe — even at 0.8434 — still replaces the
+  14795-class zero-shot head, losing recognition of ~14745 other species
+  (including vagrants the probe cannot name), exactly the coverage regression the
+  prior probe-gate rejected. The prototype is a measurably better *50-species*
+  classifier, but deploying it remains unwarranted; `train_probe_cv` stays the
+  default and the prototype is not wired into production.
+
 Negative / costs:
 
-- This wave ships the **mechanism**, not a deployed probe. Whether the
-  prototypical probe **beats** the 0.834 LogReg baseline (SC-D2) is a cluster
-  measurement that is **not run here** — it needs Perch 2 embeddings of
-  iNatSounds on the cluster (and non-bird clips for the negative class). The
-  prototype probe is not wired into production; `train_probe_cv` remains the
-  default trainer.
+- This wave ships the **mechanism**, not a deployed probe (the measured edge above
+  is a 50-species number, not a production win — see the deployment note).
 - The 0.834 baseline it is compared against is **iNatSounds held-out macro-F1**,
   not raw180 serving accuracy: iNat embeddings are the first 5 s of a focal clip
   (`fit_window` left-crop) while production feeds an onset-detected segment — a
