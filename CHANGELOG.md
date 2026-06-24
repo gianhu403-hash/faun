@@ -9,6 +9,44 @@ the git log and `~/.claude` project memory.
 
 ## [Unreleased]
 
+### Wave 2 — honest segmentation + per-recording smoothing (ADR-0006)
+
+Recall and denoising levers for bird song (the onset detector was tuned for
+transients). Additive and **OFF by default** — with all flags unset the produced
+segments and `results.csv`/`detections.jsonl` are byte-for-byte the frozen
+`main@8c24ca9` baseline (golden gate). All segment pruning happens INSIDE
+`SegmentExtractor.extract` before it returns, so the clip↔detection row-alignment
+(ADR-0003) is preserved.
+
+#### Added
+- **Dense windows (FR-002).** `SegmentExtractor` keyword knobs `dense_windows`
+  (a `window_s`-long grid hopped by `hop_s`, default 5 s / 2.5 s) for sustained
+  song the transient onset detector misses. The onset path stays the default.
+- **Silence pre-filter (FR-002b).** `silence_filter` drops produced windows whose
+  whole-window 16 kHz RMS is at/below `faun.ml.onset.MIN_ABSOLUTE_ENERGY`.
+- **Temporal-IoU NMS (FR-002c).** `nms_iou` generalizes the legacy overlap drop to
+  a greedy temporal intersection-over-union suppression (`None` = legacy
+  behaviour, exactly). Temporal only — `extract` is classifier-free.
+- **Per-recording probability smoothing (FR-004).** New sidecar
+  `prob_smoothed.json` (`faun.output.prob_smoothed` / `write_prob_smoothed`):
+  per `(recording, species)`, a time-ordered centered moving average of detection
+  probabilities. Written by `run_pipeline` **only when `FAUN_PROB_SMOOTHING` is
+  set**; raw `probability` and the CSV are untouched.
+- `prob_smoothing` setting in `faun.settings` (`FAUN_PROB_SMOOTHING`, default off).
+
+#### Unchanged (guarantees)
+- Frozen `extract(waveform, sr)` signature, `results.csv` columns, and the
+  `OnsetDetector` public API (`tests/test_onset.py` untouched).
+- Default-path output (all knobs off, `FAUN_PROB_SMOOTHING` unset) is byte-for-byte
+  the `main@8c24ca9` golden baseline.
+
+#### Deferred (documented in ADR-0006)
+- An operator seam (env/settings) for `dense_windows`/`silence_filter`/`nms_iou`:
+  this wave lands them as `SegmentExtractor` constructor primitives with
+  direct-construction tests; `run_pipeline` still builds a default extractor, so
+  the served path is unchanged. Wiring them through `faun.settings` (the seam
+  `prob_smoothing` already has) is a low-risk follow-up.
+
 ### Probability calibration — temperature scaling + reject status (ADR-0005)
 
 Fixes the misleading "logits as probability" on the served zero-shot path:

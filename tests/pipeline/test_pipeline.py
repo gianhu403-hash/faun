@@ -74,6 +74,37 @@ def test_run_batch_aligns_clips_with_detections(tmp_path: Path) -> None:
         assert r.detection.segment_path == f"segments/{r.detection.detection_id}.wav"
 
 
+def test_run_batch_alignment_holds_under_dense_and_nms(tmp_path: Path) -> None:
+    """SC-B2: with dense windows + temporal NMS the clip↔detection row-alignment
+    (ADR-0003) still holds — one clip per detection, in segment order, with each
+    clip's length consistent with its detection's duration."""
+    from faun.segmentation import SegmentExtractor
+
+    wav = tmp_path / "REC.wav"
+    _burst_wav(wav)
+    entry = SimpleNamespace(path=wav, trap_id="A1")
+    extractor = SegmentExtractor(dense_windows=True, silence_filter=True, nms_iou=0.5)
+
+    results = list(
+        run_batch(
+            [entry],
+            read_waveform=_read_f64,
+            build_labels=_stub_labels,
+            extractor=extractor,
+        )
+    )
+
+    assert results, "dense grid over a 6 s file must yield >=1 segment"
+    # One clip per detection (the alignment invariant), preserved order.
+    starts = [r.detection.segment.start_s for r in results]
+    assert starts == sorted(starts)
+    for r in results:
+        assert r.sr == SR
+        # Each clip's length tracks ITS OWN detection's duration (not another's).
+        assert abs(len(r.clip) / r.sr - r.detection.segment.duration_s) < 0.05
+        assert r.detection.segment_path == f"segments/{r.detection.detection_id}.wav"
+
+
 def test_run_batch_empty_entries_yields_nothing() -> None:
     assert list(run_batch([], read_waveform=_read_f64, build_labels=_stub_labels)) == []
 

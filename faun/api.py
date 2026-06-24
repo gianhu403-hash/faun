@@ -45,6 +45,7 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 RESULTS_CSV = "results.csv"
 DETECTIONS_JSONL = "detections.jsonl"
 SPECIES_PRESENCE_JSON = "species_presence.json"
+PROB_SMOOTHED_JSON = "prob_smoothed.json"
 SEGMENTS_DIR = "segments"
 DETECTIONS_LOCK = ".detections.lock"
 
@@ -305,6 +306,12 @@ def run_pipeline(
         # (FR-005, ADR-0004). Output-only — derived from the detections we just
         # built, after the streaming loop; the CSV / streaming path is untouched.
         output.write_species_presence(job_dir / SPECIES_PRESENCE_JSON, detections)
+        # Per-recording probability smoothing sidecar (FR-004, ADR-0006), OFF by
+        # default: only written when FAUN_PROB_SMOOTHING is set, so the default
+        # job directory (and the golden diff) is unchanged. Output-only, same
+        # post-loop position as species_presence; raw probability untouched.
+        if get_settings().prob_smoothing:
+            output.write_prob_smoothed(job_dir / PROB_SMOOTHED_JSON, detections)
 
         return results_path
     finally:

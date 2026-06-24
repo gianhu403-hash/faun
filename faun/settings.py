@@ -44,6 +44,7 @@ Defaults (match the values faun.sources actually enforces):
     yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
     perch_v2_probe_path       ``None``        (PERCH_V2_PROBE_PATH)
     species_allowlist         ``None``        (FAUN_SPECIES_ALLOWLIST)
+    prob_smoothing            ``False``       (FAUN_PROB_SMOOTHING)
 """
 
 from __future__ import annotations
@@ -213,6 +214,12 @@ class Settings:
     basic_user: str | None = None
     basic_pass: str | None = None
 
+    # Per-recording probability smoothing sidecar (FR-004, ADR-0006). OFF by
+    # default: when False, run_pipeline writes no prob_smoothed.json and the job
+    # directory is byte-for-byte what it was before. Output-only — the raw
+    # probability, results.csv and detections.jsonl are never touched.
+    prob_smoothing: bool = False
+
     # Observability.
     log_json: bool = DEFAULT_LOG_JSON
 
@@ -249,6 +256,7 @@ class Settings:
             species_allowlist=_env_path_opt("FAUN_SPECIES_ALLOWLIST"),
             basic_user=_env_secret_opt("FAUN_BASIC_USER"),
             basic_pass=_env_secret_opt("FAUN_BASIC_PASS"),
+            prob_smoothing=_env_bool("FAUN_PROB_SMOOTHING", False),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
         )
 

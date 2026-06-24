@@ -138,6 +138,39 @@ def test_run_pipeline_writes_species_presence(tmp_path: Path) -> None:
     assert all(g["trap_id"] == "A1" for g in presence["groups"])
 
 
+def test_prob_smoothing_sidecar_is_flag_gated(tmp_path: Path, monkeypatch) -> None:
+    """FR-004/SC-B6: prob_smoothed.json is written ONLY when FAUN_PROB_SMOOTHING
+    is set; OFF leaves the job dir (and results.csv) free of it. Either way the
+    raw probability / CSV are untouched."""
+    from faun.settings import get_settings
+
+    _make_trap_dir(tmp_path / "data")
+
+    # OFF (default): no sidecar.
+    monkeypatch.delenv("FAUN_PROB_SMOOTHING", raising=False)
+    get_settings.cache_clear()
+    off_csv = run_pipeline(tmp_path / "job_off", str(tmp_path / "data"))
+    assert not (tmp_path / "job_off" / "prob_smoothed.json").exists()
+
+    # ON: sidecar exists, valid JSON, per-recording shape.
+    monkeypatch.setenv("FAUN_PROB_SMOOTHING", "1")
+    get_settings.cache_clear()
+    on_csv = run_pipeline(tmp_path / "job_on", str(tmp_path / "data"))
+    sidecar = tmp_path / "job_on" / "prob_smoothed.json"
+    assert sidecar.is_file()
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert "recordings" in data and isinstance(data["recordings"], list)
+    rec = data["recordings"][0]
+    assert rec["recording"] == "REC_20260610_213000.wav"
+    pts = rec["species"][0]["points"]
+    assert all(
+        {"start_s", "probability", "probability_smoothed"} <= p.keys() for p in pts
+    )
+
+    # The raw CSV is byte-identical whether or not smoothing ran (sidecar-only).
+    assert off_csv.read_bytes() == on_csv.read_bytes()
+
+
 def test_run_pipeline_allowlist_off_is_byte_identical(
     tmp_path: Path, monkeypatch
 ) -> None:
