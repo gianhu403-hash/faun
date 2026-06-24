@@ -18,7 +18,14 @@ import numpy as np
 import pytest
 
 from faun.classification import Prediction
-from faun.classification.perch_v2 import PERCH_V2_DIM, Perch2Adapter
+from faun.classification.perch_v2 import (
+    PERCH_V2_DIM,
+    Perch2Adapter,
+    _softmax,
+    apply_presence_gate,
+    bird_presence_mass,
+)
+from faun.settings import get_settings
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +298,193 @@ def test_load_is_lazy(monkeypatch):
     assert calls["n"] == 1  # first call loaded once
     adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
     assert calls["n"] == 2  # _load is called each inference (cached inside)
+
+
+# ===========================================================================
+# Wave C — presence soft-gate (FR-003) + serve-time calibration (FR-006-serve)
+# ===========================================================================
+
+
+# ----- free-function math (SC-C3), no TF -----------------------------------
+
+
+def test_softmax_is_a_distribution() -> None:
+    p = _softmax(np.array([2.0, 1.0, -3.0, 0.5]))
+    assert p.sum() == pytest.approx(1.0)
+    assert np.all(p >= 0.0)
+    # monotone in the logits.
+    assert np.argmax(p) == 0
+
+
+def test_bird_presence_mass_sums_bird_columns() -> None:
+    scores = np.array([2.0, 1.0, -3.0, 0.5])
+    mask = np.array([True, False, True, False])
+    probs = _softmax(scores)
+    assert bird_presence_mass(scores, mask) == pytest.approx(float(probs[0] + probs[2]))
+    # All-bird -> mass 1.0; no-bird -> 0.0.
+    assert bird_presence_mass(scores, np.ones(4, bool)) == pytest.approx(1.0)
+    assert bird_presence_mass(scores, np.zeros(4, bool)) == pytest.approx(0.0)
+
+
+def test_apply_presence_gate_boost_and_clamp() -> None:
+    # k=0 is the identity (the adapter never calls it at k=0, but the math holds).
+    assert apply_presence_gate(0.4, 0.7, 0.0) == pytest.approx(0.4)
+    # k>0 with bird mass boosts the species probability.
+    assert apply_presence_gate(0.4, 0.5, 2.0) == pytest.approx(0.4 * (1 + 0.5 * 2))
+    # clamped into [0, 1].
+    assert apply_presence_gate(0.9, 1.0, 100.0) == 1.0
+    assert apply_presence_gate(0.0, 1.0, 100.0) == 0.0
+
+
+# ----- _load_bird_mask on a SYNTHETIC asset (SC-C2), no TF -----------------
+
+
+def _write_ebird_asset(model_dir, rows: list[str], header: str | None = None) -> None:
+    assets = model_dir / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    lines = ([header] if header else []) + rows
+    (assets / "perch_v2_ebird_classes.csv").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+
+
+def test_load_bird_mask_mixed_rows(tmp_path) -> None:
+    _write_ebird_asset(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b", "c"])
+    mask = adapter._load_bird_mask()
+    assert mask is not None
+    assert list(mask) == [True, False, True]
+
+
+def test_load_bird_mask_drops_sentinel_header(tmp_path) -> None:
+    _write_ebird_asset(tmp_path, ["amerob", "no_ebird_code"], header="ebird2021")
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b"])
+    mask = adapter._load_bird_mask()
+    assert list(mask) == [True, False]  # header dropped, 2 class rows
+
+
+def test_load_bird_mask_missing_file_is_none(tmp_path, caplog) -> None:
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b"])
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        assert adapter._load_bird_mask() is None
+    assert "presence gate disabled" in caplog.text
+
+
+def test_load_bird_mask_is_cached(tmp_path) -> None:
+    _write_ebird_asset(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b", "c"])
+    first = adapter._load_bird_mask()
+    # Delete the asset; a cached load must still return the same mask.
+    (tmp_path / "assets" / "perch_v2_ebird_classes.csv").unlink()
+    assert adapter._load_bird_mask() is first
+
+
+# ----- classify() gate integration (TF-free via the fake model) ------------
+
+
+def _gate_adapter(tmp_path, ebird_rows: list[str]) -> Perch2Adapter:
+    _write_ebird_asset(tmp_path, ebird_rows)
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b", "c"])
+    adapter._model = _FakeModel(_FakeSignature())  # logits [0.1, 0.9, 0.5]
+    return adapter
+
+
+def test_classify_k0_returns_raw_logits(tmp_path, monkeypatch) -> None:
+    """k=0 (default) is the LITERAL raw-logit path — not the gate at k=0."""
+    monkeypatch.delenv("FAUN_PRESENCE_GATE_K", raising=False)
+    get_settings.cache_clear()
+    adapter = _gate_adapter(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    # The fake's raw logits, verbatim (top is class 1 = 0.9).
+    assert preds[0].probability == pytest.approx(0.9)
+    assert {round(p.probability, 4) for p in preds} == {0.9, 0.5, 0.1}
+
+
+def test_classify_gate_on_rescales_to_unit_interval(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FAUN_PRESENCE_GATE_K", "2.0")
+    get_settings.cache_clear()
+    adapter = _gate_adapter(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    # Output now changes UNDER the flag: gated softmax probs, all within [0,1].
+    assert all(0.0 <= p.probability <= 1.0 for p in preds)
+    assert preds[0].probability != pytest.approx(0.9)  # no longer the raw logit
+    # Ranking is unchanged (uniform per-segment multiplier): class 1 still top.
+    assert preds[0].species == "b"
+    # Exact value: clamp01(softmax(scores)[1] * (1 + p_bird*2)).
+    scores = np.array([0.1, 0.9, 0.5])
+    probs = _softmax(scores)
+    p_bird = float(probs[0] + probs[2])
+    assert preds[0].probability == pytest.approx(
+        min(1.0, probs[1] * (1 + p_bird * 2.0))
+    )
+
+
+def test_classify_gate_length_mismatch_disables_fail_open(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """A bird mask not 1:1 with the logits disables the gate (raw logits kept)."""
+    monkeypatch.setenv("FAUN_PRESENCE_GATE_K", "2.0")
+    get_settings.cache_clear()
+    # 4 rows but the fake has 3 classes -> length mismatch.
+    adapter = _gate_adapter(tmp_path, ["a1", "no_ebird_code", "a2", "a3"])
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert preds[0].probability == pytest.approx(0.9)  # raw logit, gate skipped
+    assert "!= logit count" in caplog.text
+
+
+def test_classify_gate_missing_mask_disables(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FAUN_PRESENCE_GATE_K", "2.0")
+    get_settings.cache_clear()
+    # No eBird asset written -> mask None -> gate no-op even with k>0.
+    adapter = Perch2Adapter(model_path=str(tmp_path), labels=["a", "b", "c"])
+    adapter._model = _FakeModel(_FakeSignature())
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert preds[0].probability == pytest.approx(0.9)
+
+
+# ----- classify() calibration integration (FR-006-serve) -------------------
+
+
+def test_classify_no_calibrator_leaves_prob_calibrated_none(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.delenv("PERCH_V2_CALIBRATOR_PATH", raising=False)
+    get_settings.cache_clear()
+    adapter = _gate_adapter(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert all(p.prob_calibrated is None for p in preds)
+
+
+def test_classify_with_calibrator_sets_unit_interval_prob(
+    tmp_path, monkeypatch
+) -> None:
+    from faun.retraining import TemperatureCalibrator, save_probe
+
+    cal_path = tmp_path / "cal.pkl"
+    save_probe(TemperatureCalibrator(temperature=2.0), cal_path)
+    monkeypatch.setenv("PERCH_V2_CALIBRATOR_PATH", str(cal_path))
+    monkeypatch.delenv("FAUN_PRESENCE_GATE_K", raising=False)  # gate off
+    get_settings.cache_clear()
+
+    adapter = _gate_adapter(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+
+    # Raw probability untouched (still the logit); calibrated is softmax(logits/T).
+    assert preds[0].probability == pytest.approx(0.9)
+    scores = np.array([0.1, 0.9, 0.5])
+    expected = _softmax(scores / 2.0)
+    assert preds[0].prob_calibrated == pytest.approx(float(expected[1]))
+    assert all(0.0 <= p.prob_calibrated <= 1.0 for p in preds)
+
+
+def test_classify_bad_calibrator_path_is_fail_open(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PERCH_V2_CALIBRATOR_PATH", str(tmp_path / "nope.pkl"))
+    get_settings.cache_clear()
+    adapter = _gate_adapter(tmp_path, ["amerob", "no_ebird_code", "comrav"])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert all(p.prob_calibrated is None for p in preds)  # no crash, None

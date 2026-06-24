@@ -74,6 +74,50 @@ PERCH_V2_LABELS_FILE = "labels.csv"
 #: load-bearing guard is the len(labels)==len(logits) cross-check in ``classify``.
 _LABELS_HEADER_SENTINELS = frozenset({"inat2024_fsd50k", "ebird2021"})
 
+#: Sibling asset aligned 1:1 with ``labels.csv``: each row carries the eBird code
+#: for that class, or the literal ``no_ebird_code`` for the ~5089 non-bird
+#: (FSD50K noise: Wind, Vehicle, Speech, …) rows of Perch 2's 14795-class head.
+#: Used by the presence soft-gate (FR-003) to compute bird-mass from the SAME
+#: logits — zero extra inference.
+PERCH_V2_EBIRD_FILE = "perch_v2_ebird_classes.csv"
+
+#: The sentinel value in ``perch_v2_ebird_classes.csv`` marking a non-bird class.
+NO_EBIRD_CODE = "no_ebird_code"
+
+
+def _softmax(scores: np.ndarray) -> np.ndarray:
+    """Numerically-stable softmax over a 1-D logit vector (TF-free)."""
+    s = np.asarray(scores, dtype=np.float64)
+    s = s - np.max(s)
+    e = np.exp(s)
+    return e / np.sum(e)
+
+
+def bird_presence_mass(scores: np.ndarray, bird_mask: np.ndarray) -> float:
+    """Softmax probability mass on the bird classes — the FR-003 ``p_bird``.
+
+    A scalar in [0, 1]: how much of the segment's softmax distribution lands on
+    eBird-coded (bird) classes vs the FSD50K non-bird noise classes, from the
+    SAME logits the classifier already produced (no extra inference). Free
+    function so the math is unit-tested without TensorFlow.
+    """
+    probs = _softmax(scores)
+    return float(np.sum(probs[np.asarray(bird_mask, dtype=bool)]))
+
+
+def apply_presence_gate(p_species: float, p_bird: float, k: float) -> float:
+    """``clamp01(p_species · (1 + p_bird · k))`` — FR-003 soft presence boost.
+
+    A segment-level confidence rescale: when the segment is bird-dominated
+    (``p_bird`` high) a species probability is boosted; when it is dominated by
+    non-bird noise (``p_bird`` low) it is left near its softmax value. ``k`` is
+    the gate strength (``FAUN_PRESENCE_GATE_K``); ``k == 0`` makes this the
+    identity ``p_species`` — but at ``k == 0`` the adapter does not even reach
+    this function (it returns the raw logit unchanged), see ``classify``.
+    """
+    return float(min(1.0, max(0.0, p_species * (1.0 + p_bird * k))))
+
+
 #: Kaggle model handles. GPU handle is the default; the *_cpu variant is the
 #: cluster CPU-only build (TF without CUDA).
 PERCH_V2_HANDLE_GPU = "google/bird-vocalization-classifier/tensorFlow2/perch_v2/2"
@@ -144,6 +188,12 @@ class Perch2Adapter:
         # Whether the assets-label load has been attempted (caches a miss so we
         # don't re-stat the filesystem on every classify call).
         self._labels_loaded = False
+        # Presence-gate bird mask + serve-time calibrator, each loaded once and
+        # cached (including a cached miss -> None) so classify() stays cheap.
+        self._bird_mask = None
+        self._bird_mask_loaded = False
+        self._calibrator = None
+        self._calibrator_loaded = False
 
     def _resolve_path(self) -> str:
         """Resolve the SavedModel directory, downloading from Kaggle if needed.
@@ -304,12 +354,112 @@ class Perch2Adapter:
         )
         return self.labels
 
+    def _load_bird_mask(self) -> np.ndarray | None:
+        """Lazily load the boolean bird mask from the eBird-class asset (FR-003).
+
+        Reads ``<model_path>/assets/perch_v2_ebird_classes.csv`` once and caches
+        the result: a boolean array, True where the class has an eBird code (a
+        bird) and False where the row is ``no_ebird_code`` (FSD50K noise). Mirrors
+        ``_load_labels``' fail-safe — missing/unreadable/empty assets log a
+        warning and return ``None`` so the gate becomes a no-op rather than
+        crashing. Pure file I/O — never imports TensorFlow.
+
+        The decisive correctness guard is the ``len(mask) == len(scores)``
+        cross-check in ``classify`` (mirroring the label off-by-one guard), so a
+        wrong-length asset disables the gate instead of misclassifying noise.
+        """
+        if self._bird_mask_loaded:
+            return self._bird_mask  # cached (possibly a None miss)
+        self._bird_mask_loaded = True
+        if not self.model_path:
+            return None
+        assets = Path(self.model_path) / "assets" / PERCH_V2_EBIRD_FILE
+        if not assets.is_file():
+            logger.warning(
+                "Perch 2 eBird-class file not found at %s; presence gate disabled",
+                assets,
+            )
+            return None
+        try:
+            text = assets.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "failed to read Perch 2 eBird classes %s: %s; presence gate disabled",
+                assets,
+                exc,
+            )
+            return None
+        rows = [ln.split(",")[0].strip() for ln in text.splitlines() if ln.strip()]
+        # eBird codes are single tokens (no internal space), so the labels'
+        # "no-space => header" heuristic is unsafe here; drop ONLY a known
+        # sentinel header. The len==len(scores) cross-check in classify is the
+        # real guard if the header layout ever differs.
+        if rows and rows[0] in _LABELS_HEADER_SENTINELS:
+            rows = rows[1:]
+        if not rows:
+            logger.warning(
+                "Perch 2 eBird-class file %s has no rows; presence gate disabled",
+                assets,
+            )
+            return None
+        mask = np.array([r.lower() != NO_EBIRD_CODE for r in rows], dtype=bool)
+        self._bird_mask = mask
+        logger.info(
+            "loaded Perch 2 bird mask from %s: %d bird / %d total classes",
+            assets,
+            int(mask.sum()),
+            mask.size,
+        )
+        return mask
+
+    def _load_calibrator(self):
+        """Lazily load the serve-time temperature calibrator (FR-006-serve).
+
+        From ``get_settings().perch_v2_calibrator_path`` (``PERCH_V2_CALIBRATOR_PATH``)
+        — a pickled ``TemperatureCalibrator``. Unset -> ``None`` ->
+        ``prob_calibrated`` stays ``None`` (output unchanged). A bad/unreadable
+        pickle logs a warning and yields ``None`` rather than crashing the job.
+        Cached (including a None miss).
+        """
+        if self._calibrator_loaded:
+            return self._calibrator
+        self._calibrator_loaded = True
+        path = get_settings().perch_v2_calibrator_path
+        if not path:
+            return None
+        try:
+            from faun.retraining import load_probe
+
+            self._calibrator = load_probe(path)
+        except Exception as exc:  # noqa: BLE001 — calibration must never crash a job
+            logger.warning(
+                "failed to load Perch 2 calibrator from %s: %s; prob_calibrated "
+                "will be null",
+                path,
+                exc,
+            )
+            self._calibrator = None
+        return self._calibrator
+
     def classify(self, segment: np.ndarray, sr: int) -> list[Prediction]:
         """Return ranked species predictions for ``segment``.
 
         Predictions are named with the model's real scientific-name labels
         (``assets/labels.csv``); if those assets are unavailable the names fall
         back to ``species_<i>`` (never a crash).
+
+        Two additive, OFF-by-default signals (ADR-0007), both computed from the
+        SAME logits (no extra inference):
+
+        - **Presence soft-gate (FR-003).** With ``FAUN_PRESENCE_GATE_K == 0`` (the
+          default) the ``probability`` is the RAW logit, byte-for-byte unchanged
+          (the literal early path — NOT the gate formula evaluated at ``k == 0``,
+          which would silently swap the logit for a softmax probability). Only
+          ``k > 0`` rescales it by the segment's bird presence.
+        - **Serve-time calibration (FR-006-serve).** When a calibrator is
+          configured, ``prob_calibrated`` carries ``softmax(logits / T)[i]`` in
+          [0, 1]; otherwise ``None``. Computed from the RAW logits, independent of
+          the presence gate. The raw ``probability`` is never overwritten.
 
         Raises:
             RuntimeError: if TensorFlow is unavailable at call time.
@@ -336,4 +486,47 @@ class Perch2Adapter:
                 return labels[i]
             return f"species_{i}"
 
-        return [Prediction(_name(int(i)), float(scores[i])) for i in order]
+        settings = get_settings()
+
+        # FR-003 presence soft-gate. k == 0 is a LITERAL no-op returning the raw
+        # logit; only k > 0 (with a valid, length-matched bird mask) rescales the
+        # probability by the segment's bird presence.
+        k = settings.presence_gate_k
+        bird_mask = None
+        if k > 0:
+            bird_mask = self._load_bird_mask()
+            if bird_mask is not None and len(bird_mask) != len(scores):
+                logger.warning(
+                    "Perch 2 bird-mask length (%d) != logit count (%d); presence "
+                    "gate disabled (fail-open)",
+                    len(bird_mask),
+                    len(scores),
+                )
+                bird_mask = None
+
+        if k > 0 and bird_mask is not None:
+            probs = _softmax(scores)
+            p_bird = float(np.sum(probs[bird_mask]))
+
+            def _prob(i: int) -> float:
+                return apply_presence_gate(float(probs[i]), p_bird, k)
+        else:
+
+            def _prob(i: int) -> float:
+                return float(scores[i])  # default: raw logit, byte-for-byte unchanged
+
+        # FR-006-serve calibration. From the RAW logits, independent of the gate.
+        from faun.retraining import apply_calibration
+
+        calibrator = self._load_calibrator()
+        calibrated = (
+            apply_calibration(calibrator, scores) if calibrator is not None else None
+        )
+
+        def _calib(i: int) -> float | None:
+            return float(calibrated[i]) if calibrated is not None else None
+
+        return [
+            Prediction(_name(int(i)), _prob(int(i)), prob_calibrated=_calib(int(i)))
+            for i in order
+        ]

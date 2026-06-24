@@ -128,12 +128,19 @@ class Label:
         source: str,
         status: str = STATUS_PSEUDO,
     ) -> "Label":
-        """Lift a classifier :class:`Prediction` into a (pseudo) label."""
+        """Lift a classifier :class:`Prediction` into a (pseudo) label.
+
+        Threads the optional :attr:`Prediction.prob_calibrated` (FR-006-serve,
+        ADR-0007) into the label's sidecar field; predictions without it (the
+        default) carry ``None``, so the raw ``probability`` and the CSV are
+        untouched. ``getattr`` keeps any minimal duck-typed Prediction working.
+        """
         return cls.now(
             species=pred.species,
             probability=pred.probability,
             source=source,
             status=status,
+            prob_calibrated=getattr(pred, "prob_calibrated", None),
         )
 
     def to_dict(self) -> dict[str, Any]:
