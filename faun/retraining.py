@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import math
 import pickle  # noqa: S403  -- operator-supplied local model file, not network input
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -327,3 +328,172 @@ def species_eval(clf, X, y, *, synthetic: bool = True) -> dict:
         "ci_high": cv_metrics["ci_high"],
         "note": cv_metrics["note"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Probability calibration (FR-006, ADR-0005)
+# ---------------------------------------------------------------------------
+#
+# Why this exists: the served zero-shot ``Perch2Adapter`` reports RAW LOGITS in
+# the ``probability`` field (values > 1 — observed on raw180). A logit is not a
+# probability. Temperature scaling (Guo et al. 2017) maps a logit vector to a
+# calibrated distribution via ``softmax(logits / T)`` with a single scalar ``T``
+# fit by minimising NLL on a held-out labelled set; ``T = 1`` is plain softmax.
+#
+# Honesty contract: the raw ``probability`` is NEVER overwritten and the CSV
+# columns stay frozen — a calibrated value travels as the OPTIONAL sidecar field
+# ``Label.prob_calibrated`` (``detections.jsonl`` only). The identity default
+# (:func:`apply_calibration` with ``calibrator=None``) is a pure pass-through, so
+# nothing invents a calibrated number until a calibrator is explicitly fit and
+# configured.
+
+
+def _softmax(z: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Numerically stable softmax over ``axis``."""
+    z = np.asarray(z, dtype=np.float64)
+    z = z - np.max(z, axis=axis, keepdims=True)
+    e = np.exp(z)
+    return e / np.sum(e, axis=axis, keepdims=True)
+
+
+@dataclass
+class TemperatureCalibrator:
+    """Single-scalar temperature scaling: ``p = softmax(logits / T)``.
+
+    ``temperature == 1.0`` is plain softmax (the un-fit / neutral state).
+    ``classes`` records the class order the logit columns correspond to, so a
+    caller can align a per-class logit vector; it is informational only — the
+    transform itself is class-agnostic.
+    """
+
+    temperature: float = 1.0
+    classes: list | None = None
+
+    def apply(self, logits) -> np.ndarray:
+        """Map a logit vector / matrix to calibrated probabilities (softmax/T)."""
+        t = float(self.temperature)
+        if not math.isfinite(t) or t <= 0:
+            t = 1.0
+        return _softmax(np.asarray(logits, dtype=np.float64) / t, axis=-1)
+
+
+def fit_temperature(
+    logits,
+    y,
+    *,
+    classes=None,
+    bounds: tuple[float, float] = (0.05, 100.0),
+) -> TemperatureCalibrator:
+    """Fit a :class:`TemperatureCalibrator` by minimising multiclass NLL.
+
+    Args:
+        logits: ``(N, C)`` raw scores (one row per sample, one column per class).
+        y: length-``N`` true labels. If ``classes`` is given, ``y`` values are
+            matched against it to find the gold column; otherwise ``y`` is taken
+            as 0-based integer column indices.
+        classes: optional ordered class labels for the ``C`` columns.
+        bounds: search interval for ``T`` (must be positive).
+
+    Returns:
+        A fitted :class:`TemperatureCalibrator`. With a single class, or if the
+        optimiser fails, falls back to ``T = 1.0`` (plain softmax) rather than
+        raising — calibration must never crash a job.
+    """
+    from scipy.optimize import minimize_scalar
+
+    logits = np.asarray(logits, dtype=np.float64)
+    if logits.ndim != 2:
+        raise ValueError(f"logits must be 2-D (N, C); got shape {logits.shape}")
+    n, c = logits.shape
+
+    if classes is not None:
+        classes = list(classes)
+        index = {cls: i for i, cls in enumerate(classes)}
+        try:
+            gold = np.array([index[v] for v in np.asarray(y).tolist()], dtype=int)
+        except KeyError as exc:
+            raise ValueError(
+                f"label {exc} in y is absent from classes — y and classes must "
+                "share the same vocabulary"
+            ) from None
+    else:
+        gold = np.asarray(y, dtype=int)
+        classes = list(range(c))
+
+    if c < 2 or n == 0:
+        return TemperatureCalibrator(temperature=1.0, classes=classes)
+
+    rows = np.arange(n)
+
+    def _nll(t: float) -> float:
+        t = max(float(t), 1e-6)
+        logp = np.log(np.clip(_softmax(logits / t, axis=-1), 1e-12, 1.0))
+        return float(-np.mean(logp[rows, gold]))
+
+    result = minimize_scalar(_nll, bounds=bounds, method="bounded")
+    t = float(result.x) if getattr(result, "success", True) else 1.0
+    if not math.isfinite(t) or t <= 0:
+        t = 1.0
+    return TemperatureCalibrator(temperature=t, classes=classes)
+
+
+def apply_calibration(calibrator, logits) -> np.ndarray:
+    """Apply ``calibrator`` to ``logits``; identity (raw pass-through) if ``None``.
+
+    The identity default is the honesty guard: with no calibrator configured the
+    scores are returned unchanged (as a float array), so the pipeline never
+    fabricates a calibrated probability.
+    """
+    arr = np.asarray(logits, dtype=np.float64)
+    if calibrator is None:
+        return arr
+    return calibrator.apply(arr)
+
+
+def expected_calibration_error(
+    probs,
+    y_true,
+    *,
+    classes=None,
+    n_bins: int = 15,
+) -> float:
+    """Expected Calibration Error of top-1 confidence (lower is better).
+
+    Bins predictions by their max-probability (confidence) into ``n_bins`` equal
+    buckets and returns the sample-weighted mean gap between accuracy and mean
+    confidence per bucket. ``classes`` maps ``probs`` columns to label values
+    when ``y_true`` carries labels rather than column indices.
+    """
+    probs = np.asarray(probs, dtype=np.float64)
+    if probs.ndim != 2 or probs.shape[0] == 0:
+        return 0.0
+    pred_idx = np.argmax(probs, axis=1)
+    conf = probs[np.arange(probs.shape[0]), pred_idx]
+
+    if classes is not None:
+        classes = list(classes)
+        index = {cls: i for i, cls in enumerate(classes)}
+        gold = np.array(
+            [index.get(v, -1) for v in np.asarray(y_true).tolist()], dtype=int
+        )
+    else:
+        gold = np.asarray(y_true, dtype=int)
+    correct = (pred_idx == gold).astype(np.float64)
+
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    n = probs.shape[0]
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        # last bin is closed on the right so conf == 1.0 is counted
+        in_bin = (
+            (conf > lo) & (conf <= hi)
+            if hi < 1.0
+            else (conf > lo) & (conf <= hi + 1e-9)
+        )
+        m = int(np.sum(in_bin))
+        if m == 0:
+            continue
+        ece += (m / n) * abs(
+            float(np.mean(correct[in_bin])) - float(np.mean(conf[in_bin]))
+        )
+    return float(ece)

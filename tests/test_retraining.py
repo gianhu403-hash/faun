@@ -329,3 +329,65 @@ def test_real_embed_probe_adapter_roundtrip_cluster(tmp_path):
     probe_wav = (0.3 * np.sin(2 * np.pi * 1000.0 * t)).astype(np.float32)
     preds = adapter.classify(probe_wav, SR)
     assert preds and preds[0].species in {"species_a", "species_b"}
+
+
+# ---------------------------------------------------------------------------
+# FR-006: temperature calibration (ADR-0005)
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_logits(seed: int = 0, n: int = 400, c: int = 4, margin: float = 2.5):
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, c, n)
+    logits = rng.standard_normal((n, c))
+    logits[np.arange(n), y] += margin  # true class scores higher
+    return logits, y
+
+
+def test_apply_calibration_identity_passthrough() -> None:
+    logits, _ = _synthetic_logits()
+    out = retraining.apply_calibration(None, logits)
+    assert np.allclose(out, logits)  # no calibrator -> raw scores unchanged
+
+
+def test_temperature_calibrator_outputs_probabilities() -> None:
+    logits, y = _synthetic_logits()
+    cal = retraining.fit_temperature(logits, y)
+    probs = retraining.apply_calibration(cal, logits)
+    assert probs.min() >= 0.0 and probs.max() <= 1.0
+    assert np.allclose(probs.sum(axis=1), 1.0)
+    assert cal.temperature > 0.0
+
+
+def test_temperature_reduces_ece_on_miscalibrated_logits() -> None:
+    """Over-confident logits (x4) are mis-calibrated; fitting T lowers ECE."""
+    logits, y = _synthetic_logits(seed=1, margin=1.5)
+    miscal = logits * 4.0  # inflate -> over-confident softmax
+    ece_raw = retraining.expected_calibration_error(retraining._softmax(miscal), y)
+    cal = retraining.fit_temperature(miscal, y)
+    ece_cal = retraining.expected_calibration_error(
+        retraining.apply_calibration(cal, miscal), y
+    )
+    assert ece_cal <= ece_raw  # calibration never worsens ECE here
+    assert cal.temperature > 1.0  # cooling an over-confident model
+
+
+def test_fit_temperature_single_class_falls_back_to_one() -> None:
+    logits = np.array([[2.0], [3.0], [1.5]])
+    cal = retraining.fit_temperature(logits, [0, 0, 0])
+    assert cal.temperature == 1.0  # no calibration possible with one class
+
+
+def test_fit_temperature_with_string_classes() -> None:
+    logits, yi = _synthetic_logits(seed=2, c=3)
+    classes = ["Turdus merula", "Parus major", "Sitta europaea"]
+    y = [classes[i] for i in yi]
+    cal = retraining.fit_temperature(logits, y, classes=classes)
+    assert cal.classes == classes
+    probs = retraining.apply_calibration(cal, logits)
+    assert np.allclose(probs.sum(axis=1), 1.0)
+
+
+def test_fit_temperature_rejects_non_2d_logits() -> None:
+    with pytest.raises(ValueError, match="2-D"):
+        retraining.fit_temperature(np.array([1.0, 2.0, 3.0]), [0, 1, 2])

@@ -19,6 +19,7 @@ from faun.detections import (
     STATUS_CONFIRMED,
     STATUS_CORRECTED,
     STATUS_PSEUDO,
+    STATUS_REJECTED,
     Detection,
     Label,
     is_ground_truth,
@@ -173,3 +174,50 @@ def test_from_prediction_status_override() -> None:
     label = Label.from_prediction(pred, SOURCE_EXPERT, status=STATUS_CONFIRMED)
     assert label.status == STATUS_CONFIRMED
     assert is_ground_truth(label) is True
+
+
+# ---------------------------------------------------------------------------
+# FR-006: rejected status + prob_calibrated sidecar field (ADR-0005)
+# ---------------------------------------------------------------------------
+
+
+def test_rejected_status_is_not_ground_truth() -> None:
+    assert STATUS_REJECTED == "rejected"
+    label = Label.now("Turdus merula", 0.1, SOURCE_PERCH, STATUS_REJECTED)
+    assert is_ground_truth(label) is False
+    # even a human source stays non-ground-truth when rejected.
+    human = Label.now("Turdus merula", None, SOURCE_EXPERT, STATUS_REJECTED)
+    assert is_ground_truth(human) is False
+
+
+def test_prob_calibrated_defaults_none() -> None:
+    label = Label.now("Turdus merula", 5.7, SOURCE_PERCH, STATUS_PSEUDO)
+    assert label.prob_calibrated is None
+
+
+def test_prob_calibrated_round_trips(tmp_path: Path) -> None:
+    det = Detection.new(
+        trap_id="A1",
+        source_file="REC.wav",
+        segment=Segment(1.0, 5.0),
+        labels=[Label.now("Turdus merula", 5.7, SOURCE_PERCH, STATUS_PSEUDO, 0.83)],
+    )
+    out = tmp_path / "detections.jsonl"
+    write_detections(out, [det])
+    back = read_detections(out)
+    assert back[0].labels[0].prob_calibrated == 0.83
+    # raw probability is preserved untouched (never overwritten by calibration).
+    assert back[0].labels[0].probability == 5.7
+
+
+def test_from_dict_back_compat_without_prob_calibrated() -> None:
+    """A pre-FR-006 label dict (no prob_calibrated) loads with None."""
+    legacy = {
+        "species": "Parus major",
+        "probability": 0.5,
+        "source": SOURCE_PERCH,
+        "status": STATUS_PSEUDO,
+        "ts": "2026-06-24T00:00:00+00:00",
+    }
+    label = Label.from_dict(legacy)
+    assert label.prob_calibrated is None
