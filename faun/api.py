@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 RESULTS_CSV = "results.csv"
 DETECTIONS_JSONL = "detections.jsonl"
+SPECIES_PRESENCE_JSON = "species_presence.json"
 SEGMENTS_DIR = "segments"
 DETECTIONS_LOCK = ".detections.lock"
 
@@ -83,8 +84,8 @@ def _job_view(job: jobs.Job) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _build_classifier():
-    """Build the classifier from the FAUN_CLASSIFIER env (default ``stub``).
+def _build_base_classifier():
+    """Build the bare classifier from FAUN_CLASSIFIER (default ``stub``).
 
     Heavy adapters are imported lazily via faun.classification (PEP-562) only
     when chosen, so importing this module never pulls TensorFlow.
@@ -120,6 +121,52 @@ def _build_classifier():
     )
 
 
+def _allowlist_vocab_provider(clf):
+    """Return a callable yielding ``clf``'s label vocabulary, or ``None``.
+
+    Used by :class:`~faun.classification.MaskedClassifier` to validate allow-list
+    coverage. Only the scientific-name adapters expose a rich vocabulary; for the
+    rest the mask cannot verify coverage and stays a no-op (fail-open). Reads the
+    adapter's own (lazy) label source — resolved only after the first inference,
+    which is exactly when the coverage gate runs.
+    """
+    name = clf.__class__.__name__
+    if name == "Perch2Adapter":
+        return clf._load_labels
+    if name == "PerchProbeAdapter":
+
+        def _probe_vocab():
+            probe = clf._load_probe()
+            classes = getattr(probe, "classes_", None) if probe is not None else None
+            return [str(c) for c in classes] if classes is not None else None
+
+        return _probe_vocab
+    return None
+
+
+def _build_classifier():
+    """Build the serving classifier, applying the regional allow-list if set.
+
+    When ``FAUN_SPECIES_ALLOWLIST`` is configured (and yields a non-empty
+    checklist), the base classifier is wrapped in a
+    :class:`~faun.classification.MaskedClassifier` so the argmax is restricted to
+    regional species (ADR-0004). UNSET -> the bare classifier is returned and the
+    output is byte-for-byte unchanged (the default, prod-safe path).
+    """
+    base = _build_base_classifier()
+    spec = get_settings().species_allowlist
+    if not spec:
+        return base
+    from faun.classification import MaskedClassifier, load_allowlist
+
+    allow = load_allowlist(spec)
+    if not allow:
+        # load_allowlist already logged the misconfiguration (missing / empty /
+        # unreadable); leave the classifier unmasked rather than wrapping a no-op.
+        return base
+    return MaskedClassifier(base, allow, vocab_provider=_allowlist_vocab_provider(base))
+
+
 def _classifier_source(classifier) -> str:
     """Map a classifier instance to its detections ``source`` tag.
 
@@ -135,6 +182,12 @@ def _classifier_source(classifier) -> str:
         SOURCE_YAMNET_PROBE,
     )
 
+    # Unwrap a MaskedClassifier (ADR-0004): the source tag must reflect the real
+    # backbone (e.g. "model:perch-v2"), not the wrapper, so detections.jsonl
+    # provenance is unchanged when the regional mask is enabled. Loop in case a
+    # future change ever stacks wrappers.
+    while hasattr(classifier, "inner"):
+        classifier = classifier.inner
     name = classifier.__class__.__name__
     mapping = {
         "StubAdapter": SOURCE_STUB,
@@ -248,6 +301,10 @@ def run_pipeline(
 
         # Always write detections.jsonl — empty (zero lines) for silent input.
         write_detections(job_dir / DETECTIONS_JSONL, detections)
+        # Biologist deliverable: per-trap, per-day species presence aggregate
+        # (FR-005, ADR-0004). Output-only — derived from the detections we just
+        # built, after the streaming loop; the CSV / streaming path is untouched.
+        output.write_species_presence(job_dir / SPECIES_PRESENCE_JSON, detections)
 
         return results_path
     finally:

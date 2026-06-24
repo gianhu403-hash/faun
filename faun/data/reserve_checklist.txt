@@ -1,0 +1,82 @@
+# Reserve regional species allow-list (default seed for the MaskedClassifier, ADR-0004).
+#
+# One scientific binomial ("Genus species") per line. Lines starting with "#"
+# and blank lines are ignored. Matching is case-insensitive and tolerant of
+# underscores ("Genus_species") and extra whitespace (see faun.classification
+# _species_key / _binomial normalization).
+#
+# Provenance: Palearctic taiga / broad-leaved forest birds of the Nizhny Novgorod
+# reserve. This list mirrors scripts/extract_inatsounds_subset.py:RESERVE (69
+# species, kept in sync by hand — this file does NOT import scripts/). It is a
+# starting point to be refined by the reserve's ornithologist; edit freely or
+# point FAUN_SPECIES_ALLOWLIST at an operator-supplied file.
+
+Fringilla coelebs
+Fringilla montifringilla
+Chloris chloris
+Carduelis carduelis
+Spinus spinus
+Pyrrhula pyrrhula
+Coccothraustes coccothraustes
+Emberiza citrinella
+Emberiza schoeniclus
+Turdus merula
+Turdus pilaris
+Turdus philomelos
+Turdus iliacus
+Turdus viscivorus
+Erithacus rubecula
+Luscinia luscinia
+Phoenicurus phoenicurus
+Ficedula hypoleuca
+Muscicapa striata
+Sylvia atricapilla
+Sylvia borin
+Sylvia communis
+Sylvia curruca
+Phylloscopus trochilus
+Phylloscopus collybita
+Phylloscopus sibilatrix
+Regulus regulus
+Parus major
+Cyanistes caeruleus
+Periparus ater
+Poecile montanus
+Poecile palustris
+Lophophanes cristatus
+Aegithalos caudatus
+Sitta europaea
+Certhia familiaris
+Troglodytes troglodytes
+Prunella modularis
+Motacilla alba
+Anthus trivialis
+Lanius collurio
+Sturnus vulgaris
+Garrulus glandarius
+Pica pica
+Corvus corax
+Corvus cornix
+Cuculus canorus
+Dendrocopos major
+Dryocopus martius
+Picus canus
+Jynx torquilla
+Columba palumbus
+Streptopelia turtur
+Strix aluco
+Asio otus
+Bubo bubo
+Glaucidium passerinum
+Buteo buteo
+Accipiter nisus
+Accipiter gentilis
+Pernis apivorus
+Tetrastes bonasia
+Grus grus
+Scolopax rusticola
+Apus apus
+Hirundo rustica
+Oriolus oriolus
+Anas platyrhynchos
+Upupa epops

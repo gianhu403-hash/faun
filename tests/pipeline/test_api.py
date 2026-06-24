@@ -535,3 +535,49 @@ def test_jobrequest_rejects_non_finite_coords():
             JobRequest(source_path="/data/A1", lat=bad)
     # A valid in-range coordinate still constructs fine.
     assert JobRequest(source_path="/data/A1", lat=58.1, lon=45.2).lat == 58.1
+
+
+# ---------------------------------------------------------------------------
+# Classifier build + regional allow-list wiring (FR-001, ADR-0004)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildClassifierAllowlist:
+    def test_unmasked_by_default(self, monkeypatch) -> None:
+        """No FAUN_SPECIES_ALLOWLIST -> the bare classifier (prod-safe path)."""
+        from faun.classification import StubAdapter
+        from faun.settings import get_settings
+
+        monkeypatch.delenv("FAUN_SPECIES_ALLOWLIST", raising=False)
+        monkeypatch.setenv("FAUN_CLASSIFIER", "stub")
+        get_settings.cache_clear()
+        clf = api._build_classifier()
+        assert isinstance(clf, StubAdapter)
+
+    def test_wraps_when_allowlist_set(self, monkeypatch) -> None:
+        from faun.classification import MaskedClassifier, StubAdapter
+        from faun.settings import get_settings
+
+        monkeypatch.setenv("FAUN_CLASSIFIER", "stub")
+        monkeypatch.setenv("FAUN_SPECIES_ALLOWLIST", "default")
+        get_settings.cache_clear()
+        clf = api._build_classifier()
+        assert isinstance(clf, MaskedClassifier)
+        assert isinstance(clf.inner, StubAdapter)
+
+    def test_missing_file_stays_unmasked(self, monkeypatch, tmp_path) -> None:
+        from faun.classification import StubAdapter
+        from faun.settings import get_settings
+
+        monkeypatch.setenv("FAUN_CLASSIFIER", "stub")
+        monkeypatch.setenv("FAUN_SPECIES_ALLOWLIST", str(tmp_path / "nope.txt"))
+        get_settings.cache_clear()
+        clf = api._build_classifier()
+        assert isinstance(clf, StubAdapter)  # bad file -> no wrap (no-op)
+
+    def test_classifier_source_unwraps_mask(self) -> None:
+        from faun.classification import MaskedClassifier, StubAdapter
+        from faun.detections import SOURCE_STUB
+
+        masked = MaskedClassifier(StubAdapter(), ["Turdus merula"])
+        assert api._classifier_source(masked) == SOURCE_STUB

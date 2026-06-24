@@ -15,9 +15,17 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import IO, Iterable, Sequence
+
+logger = logging.getLogger(__name__)
+
+#: One-time guard so a (near-impossible) failure to import the ingest filename
+#: parser warns once instead of silently nulling every day on every detection.
+_DAY_PARSER_IMPORT_WARNED = False
 
 __all__ = [
     "PIPELINE_VERSION",
@@ -25,6 +33,8 @@ __all__ = [
     "TrapMeta",
     "CsvWriter",
     "COLUMNS",
+    "species_presence",
+    "write_species_presence",
 ]
 
 # Pipeline schema/version stamped into the sidecar. Bump on breaking changes
@@ -123,6 +133,151 @@ def _coerce_row(row: ResultRow | dict[str, object] | Sequence[object]) -> Result
         species=str(species),
         probability=float(probability),
     )
+
+
+# ---------------------------------------------------------------------------
+# Species presence aggregate (sidecar species_presence.json) — FR-005, ADR-0004
+# ---------------------------------------------------------------------------
+
+
+def _detection_day(source_file: str) -> str | None:
+    """Best-effort recording day (``YYYY-MM-DD``) from a detection's filename.
+
+    Reuses ``faun.ingest`` — the single owner of filename→timestamp parsing — so
+    the presence aggregate buckets by the same day ingest would derive. Returns
+    ``None`` when the filename carries no parseable timestamp (the group is then
+    keyed by ``day = null`` rather than guessing).
+    """
+    try:
+        from faun.ingest.files import _parse_filename_timestamp
+    except Exception:  # noqa: BLE001 — never let aggregation crash on an import
+        global _DAY_PARSER_IMPORT_WARNED
+        if not _DAY_PARSER_IMPORT_WARNED:
+            logger.warning(
+                "could not import the ingest filename parser; species_presence "
+                "day buckets will all be null",
+                exc_info=True,
+            )
+            _DAY_PARSER_IMPORT_WARNED = True
+        return None
+    dt = _parse_filename_timestamp(str(source_file))
+    return dt.date().isoformat() if dt is not None else None
+
+
+def _best_label(labels):
+    """Pick the one label that attributes a detection to a species.
+
+    Human ground truth wins over model pseudo-labels (a confirmed/corrected
+    label is the truth for that detection); otherwise the highest-probability
+    model label is used. Returns ``None`` for a detection with no labels (e.g.
+    every prediction masked out) — such detections are counted but attributed to
+    no species. Keeping ONE attribution per detection makes the per-species
+    counts sum to the number of attributed detections (an honest detection
+    count, verifiable against ``detections.jsonl``).
+    """
+    from faun.detections import is_ground_truth
+
+    labels = list(labels)
+    if not labels:
+        return None
+    truth = [lbl for lbl in labels if is_ground_truth(lbl)]
+    if truth:
+        # Most recent human decision wins (labels are appended in time order).
+        return truth[-1]
+    return max(
+        labels, key=lambda lbl: lbl.probability if lbl.probability is not None else -1.0
+    )
+
+
+def species_presence(detections: Iterable) -> dict:
+    """Aggregate detections into a per-trap, per-day species presence summary.
+
+    For each ``(trap_id, day)`` group, reports each attributed species with its
+    detection count and the max / mean of the contributing pseudo-label
+    probabilities (human ground-truth labels carry no probability and so do not
+    contribute to the stats, only to the count). Attribution is one species per
+    detection (see :func:`_best_label`). Pure: reads only ``Detection`` objects,
+    no I/O beyond the lazy filename-day parse.
+
+    Returns a JSON-serialisable dict ``{pipeline_version, attribution, groups}``
+    where ``groups`` is sorted by ``(trap_id, day)`` and each group's ``species``
+    is sorted by descending detection count then name. Each group's
+    ``n_detections`` counts every detected event in that ``(trap, day)`` (so the
+    group totals sum to the number of detections in ``detections.jsonl``); the
+    per-species ``detections`` cover only the attributed events.
+    """
+    # group key -> species key -> {"species": display, "count": int, "probs": [..]}
+    groups: dict[tuple[str, str | None], dict[str, dict]] = {}
+    group_totals: dict[tuple[str, str | None], int] = {}
+
+    for det in detections:
+        trap_id = getattr(det, "trap_id", "")
+        day = _detection_day(getattr(det, "source_file", ""))
+        key = (trap_id, day)
+        groups.setdefault(key, {})
+        # Count EVERY detected event in the group (so the group totals sum to the
+        # number of lines in detections.jsonl, SC-004); the per-species counts
+        # below only cover the attributed ones — the gap is all-masked-out events.
+        group_totals[key] = group_totals.get(key, 0) + 1
+        label = _best_label(getattr(det, "labels", []))
+        if label is None:
+            continue  # detected event with no species attribution
+        species_name = label.species
+        bucket = groups[key].setdefault(
+            species_name, {"species": species_name, "count": 0, "probs": []}
+        )
+        bucket["count"] += 1
+        if label.probability is not None:
+            bucket["probs"].append(float(label.probability))
+
+    out_groups = []
+    for trap_id, day in sorted(groups, key=lambda k: (k[0], k[1] or "")):
+        species_rows = []
+        for bucket in groups[(trap_id, day)].values():
+            probs = bucket["probs"]
+            species_rows.append(
+                {
+                    "species": bucket["species"],
+                    "detections": bucket["count"],
+                    "max_probability": round(max(probs), _PROB_DIGITS)
+                    if probs
+                    else None,
+                    "mean_probability": (
+                        round(sum(probs) / len(probs), _PROB_DIGITS) if probs else None
+                    ),
+                }
+            )
+        species_rows.sort(key=lambda r: (-r["detections"], r["species"]))
+        out_groups.append(
+            {
+                "trap_id": trap_id,
+                "day": day,
+                "n_detections": group_totals[(trap_id, day)],
+                "species": species_rows,
+            }
+        )
+
+    return {
+        "pipeline_version": PIPELINE_VERSION,
+        "attribution": "best-label-per-detection; human ground-truth wins",
+        "groups": out_groups,
+    }
+
+
+def write_species_presence(path: str | Path, detections: Iterable) -> Path:
+    """Write the :func:`species_presence` aggregate to ``path`` as JSON.
+
+    Written atomically (tmp + ``os.replace``), mirroring
+    ``faun.detections.write_detections``, so a crashed run never leaves a
+    truncated sidecar.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    payload = json.dumps(species_presence(detections), ensure_ascii=False, indent=2)
+    tmp_path.write_text(payload + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+    return path
 
 
 class CsvWriter:
