@@ -9,6 +9,32 @@ the git log and `~/.claude` project memory.
 
 ## [Unreleased]
 
+### Wave 5 — demo polish: spectrogram PNGs, Raven export, review filters (ADR-0009)
+
+Review-UI affordances for the ornithologist hand-off. Additive — no pipeline
+output change, so the golden gate is untouched; `faun/` still never imports from
+`experiments/`.
+
+#### Added
+- **Spectrogram PNG (FR-008).** New self-contained `faun/spectrogram.py` (copy of
+  `experiments.common.save_spectrogram_png`, matplotlib Agg imported lazily). New
+  route `GET /jobs/{id}/segments/{det}.png` mirrors `get_segment` (hex-id
+  traversal guard), renders lazily from the existing clip and caches the PNG
+  atomically (temp + `Path.replace`) next to it. `review.html` gains an `<img
+  loading=lazy>` spectrogram thumbnail per detection.
+- **Raven / Audacity export (FR-009).** New CLI `faun export-raven --job <dir>
+  --out <tsv>` (`_export_raven`): generic `detections.jsonl` parse (no
+  `faun.detections` import, like `export-clips`) → Raven Pro selection table;
+  `Begin/End Time` from the segment, `Species` = the current (most recent) label.
+- **Review filters (FR-010).** Client-side species-substring + min-confidence
+  filter bar in `review.html` (reuses `currentLabel`); no backend call.
+- `matplotlib==3.9.2` pinned in `requirements-pipeline.txt` (lazy + needed by the
+  deploy image for the spectrogram route).
+
+#### Unchanged (guarantees)
+- No pipeline-output change (the PNG renders on HTTP request, never in
+  `run_pipeline`); golden gate untouched; frozen CSV columns + signatures intact.
+
 ### Wave 4 — prototypical probe with a negative (background) class (ADR-0008)
 
 A new probe trainer beside `train_probe_cv` that gives the **probe** path an
