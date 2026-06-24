@@ -136,6 +136,94 @@ class TestSegmentExtractor:
             SegmentExtractor(padding_s=-1.0)
 
 
+# ---------------------------------------------------------------------------
+# Honest-segmentation knobs (ADR-0006): dense windows, silence filter, NMS.
+# Every one OFF by default — SC-B1 (golden) lives in test_golden.py; here we
+# assert the ON behaviour and that the default path is untouched.
+# ---------------------------------------------------------------------------
+
+
+class TestHonestSegmentation:
+    def _two_bursts_6s(self) -> np.ndarray:
+        """6 s mono 48k: quiet floor + 0.5 s bursts at 1.0 s and 4.0 s."""
+        sr = SR_48K
+        t = np.arange(int(sr * 6)) / sr
+        sig = (1e-5 * np.random.default_rng(7).standard_normal(t.size)).astype(
+            np.float32
+        )
+        for centre in (1.0, 4.0):
+            m = (t >= centre) & (t < centre + 0.5)
+            sig[m] += (0.7 * np.sin(2 * np.pi * 500.0 * t[m])).astype(np.float32)
+        return sig
+
+    def test_default_path_is_onset_not_grid(self) -> None:
+        """All knobs OFF -> identical to the bare onset extractor (no grid)."""
+        wav = self._two_bursts_6s()
+        base = SegmentExtractor().extract(wav, SR_48K)
+        same = SegmentExtractor(
+            dense_windows=False, silence_filter=False, nms_iou=None
+        ).extract(wav, SR_48K)
+        assert base == same
+
+    def test_dense_windows_tile_the_recording(self) -> None:
+        """5 s windows @ 2.5 s hop over 6 s -> starts 0.0/2.5/5.0 (SC-B3)."""
+        wav = self._two_bursts_6s()
+        segs = SegmentExtractor(dense_windows=True).extract(wav, SR_48K)
+        assert [round(s.start_s, 2) for s in segs] == [0.0, 2.5, 5.0]
+        assert round(segs[0].duration_s, 2) == 5.0  # full window
+        assert round(segs[-1].duration_s, 2) == 1.0  # clamped to file end
+
+    def test_dense_window_geometry_is_configurable(self) -> None:
+        wav = self._two_bursts_6s()
+        segs = SegmentExtractor(dense_windows=True, window_s=2.0, hop_s=2.0).extract(
+            wav, SR_48K
+        )
+        assert [round(s.start_s, 2) for s in segs] == [0.0, 2.0, 4.0]
+        assert all(round(s.duration_s, 2) == 2.0 for s in segs)
+
+    def test_silence_filter_drops_empty_windows(self) -> None:
+        """Dense grid over two bursts: the all-silence tail window is pruned."""
+        wav = self._two_bursts_6s()
+        kept = SegmentExtractor(dense_windows=True, silence_filter=True).extract(
+            wav, SR_48K
+        )
+        starts = [round(s.start_s, 2) for s in kept]
+        # The 5.0–6.0 window holds only noise floor -> dropped; 0.0 and 2.5 keep
+        # a burst (1.0 s resp. 4.0 s) -> retained.
+        assert 5.0 not in starts
+        assert 0.0 in starts and 2.5 in starts
+
+    def test_nms_collapses_overlapping_windows(self) -> None:
+        wav = self._two_bursts_6s()
+        dense = SegmentExtractor(dense_windows=True).extract(wav, SR_48K)
+        nmsed = SegmentExtractor(dense_windows=True, nms_iou=0.3).extract(wav, SR_48K)
+        assert len(nmsed) < len(dense)
+        # Greedy keep-earliest: the 0.0 window survives, the heavily-overlapping
+        # 2.5 window is suppressed (IoU 0–5 vs 2.5–6 = 2.5/6 ≈ 0.42 > 0.3).
+        starts = [round(s.start_s, 2) for s in nmsed]
+        assert starts[0] == 0.0
+        assert 2.5 not in starts
+
+    def test_nms_keeps_disjoint_windows(self) -> None:
+        """Non-overlapping windows survive any IoU threshold."""
+        wav = self._two_bursts_6s()
+        segs = SegmentExtractor(
+            dense_windows=True, window_s=2.0, hop_s=2.0, nms_iou=0.1
+        ).extract(wav, SR_48K)
+        # 0–2, 2–4, 4–6 are disjoint (IoU 0) -> all kept.
+        assert [round(s.start_s, 2) for s in segs] == [0.0, 2.0, 4.0]
+
+    def test_invalid_new_params_raise(self) -> None:
+        with pytest.raises(ValueError):
+            SegmentExtractor(window_s=0.0)
+        with pytest.raises(ValueError):
+            SegmentExtractor(hop_s=-1.0)
+        with pytest.raises(ValueError):
+            SegmentExtractor(nms_iou=0.0)
+        with pytest.raises(ValueError):
+            SegmentExtractor(nms_iou=1.5)
+
+
 class TestDownmixResample:
     def test_downmix_is_channel_mean(self) -> None:
         left = np.full(1000, 0.4, dtype=np.float32)

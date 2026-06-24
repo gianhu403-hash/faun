@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from faun import audio
-from faun.ml.onset import OnsetDetector
+from faun.ml.onset import MIN_ABSOLUTE_ENERGY, OnsetDetector
 
 __all__ = ["Segment", "SegmentExtractor"]
 
@@ -50,6 +50,27 @@ class SegmentExtractor:
         max_segment_s: hard cap on segment duration.
         padding_s: context included before the detected onset.
         chunk_s: chunk size fed to the stateful detector per call.
+
+    Honest-segmentation knobs (ADR-0006), every one OFF / no-op by default so
+    the produced segments — and therefore ``results.csv`` / ``detections.jsonl``
+    — are byte-for-byte unchanged unless explicitly enabled:
+
+        dense_windows: replace the transient-onset detector with a fixed grid of
+            ``window_s``-long windows hopped by ``hop_s`` (recall for sustained
+            song the onset detector misses). The onset path stays the default.
+        window_s / hop_s: dense-grid geometry (only used when ``dense_windows``).
+        silence_filter: drop produced windows whose RMS energy is at or below the
+            onset detector's silence floor (``onset.MIN_ABSOLUTE_ENERGY``) — most
+            useful to prune empty dense windows.
+        nms_iou: when set (0, 1], greedily suppress later segments whose temporal
+            IoU with an already-kept one exceeds the threshold. ``None`` keeps the
+            existing construction-time "onset inside the previous segment" drop
+            exactly. TEMPORAL only: ``extract`` is classifier-free (it never sees
+            scores), so a per-species NMS is impossible here by construction.
+
+    All of the above run INSIDE ``extract`` before it returns, so the clip↔
+    detection row-alignment (ADR-0003) downstream is preserved — there is no
+    post-``run_batch`` filtering or reordering.
     """
 
     def __init__(
@@ -60,6 +81,11 @@ class SegmentExtractor:
         max_segment_s: float = 5.0,
         padding_s: float = 0.25,
         chunk_s: float = 1.0,
+        dense_windows: bool = False,
+        window_s: float = 5.0,
+        hop_s: float = 2.5,
+        silence_filter: bool = False,
+        nms_iou: float | None = None,
     ) -> None:
         if min_segment_s <= 0 or max_segment_s < min_segment_s:
             raise ValueError(
@@ -68,18 +94,33 @@ class SegmentExtractor:
             )
         if padding_s < 0 or chunk_s <= 0:
             raise ValueError(f"invalid {padding_s=} or {chunk_s=}")
+        if window_s <= 0 or hop_s <= 0:
+            raise ValueError(f"need positive window_s/hop_s, got {window_s=} {hop_s=}")
+        if nms_iou is not None and not 0.0 < nms_iou <= 1.0:
+            raise ValueError(f"nms_iou must be in (0, 1], got {nms_iou}")
         self.energy_ratio_threshold = energy_ratio_threshold
         self.min_segment_s = min_segment_s
         self.max_segment_s = max_segment_s
         self.padding_s = padding_s
         self.chunk_s = chunk_s
+        self.dense_windows = dense_windows
+        self.window_s = window_s
+        self.hop_s = hop_s
+        self.silence_filter = silence_filter
+        self.nms_iou = nms_iou
 
     # ------------------------------------------------------------------
     # Public API (frozen contract)
     # ------------------------------------------------------------------
 
     def extract(self, waveform: np.ndarray, sr: int) -> list[Segment]:
-        """Return event segments, in seconds of the *original* recording."""
+        """Return event segments, in seconds of the *original* recording.
+
+        With every ADR-0006 knob at its default this is the original onset path,
+        byte-for-byte; the dense-window / silence / NMS branches only diverge when
+        explicitly enabled. Any pruning happens here before the list is returned,
+        so the downstream clip↔detection alignment (ADR-0003) is never disturbed.
+        """
         if sr <= 0:
             raise ValueError(f"sample rate must be positive, got {sr}")
         mono = self._downmix(np.asarray(waveform))
@@ -87,8 +128,16 @@ class SegmentExtractor:
             return []
         audio = self._resample(mono, sr)
         total_s = len(audio) / TARGET_SR
-        onsets = self._detect_onsets(audio)
-        return self._build_segments(onsets, total_s)
+        if self.dense_windows:
+            segments = self._dense_windows(total_s)
+        else:
+            onsets = self._detect_onsets(audio)
+            segments = self._build_segments(onsets, total_s)
+        if self.silence_filter:
+            segments = self._drop_silent(segments, audio)
+        if self.nms_iou is not None:
+            segments = self._nms_temporal(segments, self.nms_iou)
+        return segments
 
     # ------------------------------------------------------------------
     # Internals
@@ -130,3 +179,63 @@ class SegmentExtractor:
                 continue
             segments.append(Segment(start_s=start, duration_s=duration))
         return segments
+
+    def _dense_windows(self, total_s: float) -> list[Segment]:
+        """Tile ``[0, total_s)`` with ``window_s`` windows hopped by ``hop_s``.
+
+        The final window is clamped to ``total_s`` and dropped if shorter than
+        ``min_segment_s``. Used for recall on sustained song the transient onset
+        detector misses (FR-002). Returns windows in start order.
+        """
+        segments: list[Segment] = []
+        if total_s <= 0:
+            return segments
+        start = 0.0
+        while start < total_s - 1e-9:
+            end = min(total_s, start + self.window_s)
+            duration = end - start
+            if duration >= self.min_segment_s:
+                segments.append(Segment(start_s=start, duration_s=duration))
+            start += self.hop_s
+        return segments
+
+    def _drop_silent(self, segments: list[Segment], audio: np.ndarray) -> list[Segment]:
+        """Drop segments whose 16 kHz RMS energy is at/below the silence floor.
+
+        Reuses ``faun.ml.onset.MIN_ABSOLUTE_ENERGY`` (the detector's own floor),
+        so a window the onset path would never trigger on is pruned consistently
+        (FR-002b). RMS matches the energy metric the onset detector uses.
+        """
+        kept: list[Segment] = []
+        for seg in segments:
+            lo = max(0, int(round(seg.start_s * TARGET_SR)))
+            hi = min(len(audio), int(round(seg.end_s * TARGET_SR)))
+            frame = audio[lo:hi]
+            if frame.size == 0:
+                continue
+            rms = float(np.sqrt(np.mean(np.square(frame, dtype=np.float64))))
+            if rms <= MIN_ABSOLUTE_ENERGY:
+                continue
+            kept.append(seg)
+        return kept
+
+    @staticmethod
+    def _temporal_iou(a: Segment, b: Segment) -> float:
+        """Temporal intersection-over-union of two segments (0 when disjoint)."""
+        inter = max(0.0, min(a.end_s, b.end_s) - max(a.start_s, b.start_s))
+        union = a.duration_s + b.duration_s - inter
+        return inter / union if union > 0 else 0.0
+
+    def _nms_temporal(self, segments: list[Segment], iou: float) -> list[Segment]:
+        """Greedily suppress later segments overlapping a kept one above ``iou``.
+
+        ``extract`` is classifier-free, so there are no scores to rank by — the
+        deterministic, alignment-safe choice is to keep the earlier segment and
+        drop the later overlapping ones (FR-002c). Temporal IoU only.
+        """
+        kept: list[Segment] = []
+        for seg in segments:
+            if any(self._temporal_iou(seg, k) > iou for k in kept):
+                continue
+            kept.append(seg)
+        return kept

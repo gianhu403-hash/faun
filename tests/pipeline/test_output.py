@@ -20,6 +20,8 @@ from faun.output import (
     TrapMeta,
     species_presence,
     write_species_presence,
+    prob_smoothed,
+    write_prob_smoothed,
 )
 from faun.detections import (
     Detection,
@@ -340,3 +342,85 @@ class TestSpeciesPresence:
         data = json.loads(out_path.read_text(encoding="utf-8"))
         assert data["groups"][0]["trap_id"] == "A1"
         assert data["groups"][0]["species"][0]["species"] == "Turdus merula"
+
+
+# ---------------------------------------------------------------------------
+# Per-recording probability smoothing (prob_smoothed.json) — FR-004, ADR-0006
+# ---------------------------------------------------------------------------
+
+
+def _det_at(trap: str, fname: str, start_s: float, *labels: Label) -> Detection:
+    """Detection at a given segment start (prob_smoothed orders points by time)."""
+    return Detection.new(
+        trap_id=trap,
+        source_file=fname,
+        segment=Segment(start_s, 5.0),
+        labels=list(labels),
+    )
+
+
+class TestProbSmoothed:
+    def test_points_time_ordered_and_averaged(self) -> None:
+        # Same recording + species, three detections out of time order on input.
+        dets = [
+            _det_at("A1", "REC.wav", 6.0, _pseudo("Turdus merula", 0.9)),
+            _det_at("A1", "REC.wav", 0.0, _pseudo("Turdus merula", 0.3)),
+            _det_at("A1", "REC.wav", 3.0, _pseudo("Turdus merula", 0.6)),
+        ]
+        out = prob_smoothed(dets, window=3)
+        rec = out["recordings"][0]
+        assert rec["recording"] == "REC.wav"
+        pts = rec["species"][0]["points"]
+        # Sorted by start_s.
+        assert [p["start_s"] for p in pts] == [0.0, 3.0, 6.0]
+        # Raw probabilities are preserved verbatim (rounded), never overwritten.
+        assert [p["probability"] for p in pts] == [0.3, 0.6, 0.9]
+        # Centered moving average, edge-clamped: [(.3+.6)/2, (.3+.6+.9)/3, (.6+.9)/2].
+        assert [p["probability_smoothed"] for p in pts] == [0.45, 0.6, 0.75]
+
+    def test_window_one_is_passthrough(self) -> None:
+        dets = [
+            _det_at("A1", "REC.wav", 0.0, _pseudo("Parus major", 0.2)),
+            _det_at("A1", "REC.wav", 3.0, _pseudo("Parus major", 0.95)),
+        ]
+        pts = prob_smoothed(dets, window=1)["recordings"][0]["species"][0]["points"]
+        assert [p["probability"] for p in pts] == [
+            p["probability_smoothed"] for p in pts
+        ]
+
+    def test_grouped_by_recording_then_species(self) -> None:
+        dets = [
+            _det_at("A1", "B.wav", 0.0, _pseudo("Parus major", 0.5)),
+            _det_at("A1", "A.wav", 0.0, _pseudo("Turdus merula", 0.5)),
+            _det_at("A1", "A.wav", 1.0, _pseudo("Corvus corax", 0.5)),
+        ]
+        out = prob_smoothed(dets)
+        assert [r["recording"] for r in out["recordings"]] == ["A.wav", "B.wav"]
+        # Species sorted by name within a recording.
+        assert [s["species"] for s in out["recordings"][0]["species"]] == [
+            "Corvus corax",
+            "Turdus merula",
+        ]
+
+    def test_human_label_without_probability_skipped(self) -> None:
+        # Ground-truth label wins attribution but carries no probability -> no point.
+        det = _det_at(
+            "A1",
+            "REC.wav",
+            0.0,
+            Label.now("Bubo bubo", None, SOURCE_RANGER, STATUS_CORRECTED),
+        )
+        assert prob_smoothed([det])["recordings"] == []
+
+    def test_empty_detections(self) -> None:
+        out = prob_smoothed([])
+        assert out["recordings"] == []
+        assert out["pipeline_version"] == PIPELINE_VERSION
+
+    def test_write_prob_smoothed_round_trips(self, tmp_path: Path) -> None:
+        dets = [_det_at("A1", "REC.wav", 0.0, _pseudo("Turdus merula", 0.9))]
+        out_path = write_prob_smoothed(tmp_path / "prob_smoothed.json", dets)
+        assert out_path.is_file()
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        assert data["recordings"][0]["recording"] == "REC.wav"
+        assert data["window"] == 3

@@ -35,6 +35,8 @@ __all__ = [
     "COLUMNS",
     "species_presence",
     "write_species_presence",
+    "prob_smoothed",
+    "write_prob_smoothed",
 ]
 
 # Pipeline schema/version stamped into the sidecar. Bump on breaking changes
@@ -275,6 +277,110 @@ def write_species_presence(path: str | Path, detections: Iterable) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.tmp")
     payload = json.dumps(species_presence(detections), ensure_ascii=False, indent=2)
+    tmp_path.write_text(payload + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Per-recording probability smoothing (sidecar prob_smoothed.json) — FR-004, ADR-0006
+# ---------------------------------------------------------------------------
+
+
+def _moving_average(values: list[float], window: int) -> list[float]:
+    """Centered moving average, edge-clamped (uses the available neighbours).
+
+    ``window <= 1`` is a pass-through. A window of 3 averages each point with its
+    immediate neighbours; at the ends the average simply spans fewer points.
+    """
+    if window <= 1 or len(values) <= 1:
+        return list(values)
+    half = window // 2
+    n = len(values)
+    out: list[float] = []
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        span = values[lo:hi]
+        out.append(sum(span) / len(span))
+    return out
+
+
+def prob_smoothed(detections: Iterable, *, window: int = 3) -> dict:
+    """Temporally smooth each recording's per-species detection probabilities.
+
+    For every ``(recording, species)`` the best-label (see :func:`_best_label`)
+    probabilities are ordered by segment start time and run through a centered
+    moving average (``window``). The result is a denoised presence-over-time
+    series — a sporadic single high score reads differently from a sustained run
+    of high scores. **Output-only and additive**: the raw ``probability``,
+    ``results.csv`` and ``detections.jsonl`` are never touched; this lives purely
+    in the ``prob_smoothed.json`` sidecar.
+
+    Returns a JSON-serialisable dict ``{pipeline_version, smoothing, window,
+    recordings}`` where ``recordings`` is sorted by recording filename and each
+    carries its species (sorted by name), each species a time-ordered list of
+    ``{start_s, probability, probability_smoothed}`` points.
+    """
+    # recording -> species -> list[(start_s, probability)]
+    recs: dict[str, dict[str, list[tuple[float, float]]]] = {}
+    for det in detections:
+        source_file = str(getattr(det, "source_file", ""))
+        label = _best_label(getattr(det, "labels", []))
+        if label is None or label.probability is None:
+            continue
+        segment = getattr(det, "segment", None)
+        start_s = float(getattr(segment, "start_s", 0.0))
+        recs.setdefault(source_file, {}).setdefault(label.species, []).append(
+            (start_s, float(label.probability))
+        )
+
+    out_recordings = []
+    for source_file in sorted(recs):
+        species_rows = []
+        for species in sorted(recs[source_file]):
+            points = sorted(recs[source_file][species], key=lambda p: p[0])
+            probs = [p for _, p in points]
+            smoothed = _moving_average(probs, window)
+            species_rows.append(
+                {
+                    "species": species,
+                    "points": [
+                        {
+                            "start_s": round(start_s, _SEC_DIGITS),
+                            "probability": round(raw, _PROB_DIGITS),
+                            "probability_smoothed": round(sm, _PROB_DIGITS),
+                        }
+                        for (start_s, raw), sm in zip(points, smoothed)
+                    ],
+                }
+            )
+        out_recordings.append({"recording": source_file, "species": species_rows})
+
+    return {
+        "pipeline_version": PIPELINE_VERSION,
+        "smoothing": (
+            f"centered moving average (window={window}) over per-recording, "
+            "per-species detection probabilities; raw probability untouched"
+        ),
+        "window": window,
+        "recordings": out_recordings,
+    }
+
+
+def write_prob_smoothed(
+    path: str | Path, detections: Iterable, *, window: int = 3
+) -> Path:
+    """Write the :func:`prob_smoothed` aggregate to ``path`` as JSON.
+
+    Atomic (tmp + ``os.replace``), mirroring :func:`write_species_presence`.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    payload = json.dumps(
+        prob_smoothed(detections, window=window), ensure_ascii=False, indent=2
+    )
     tmp_path.write_text(payload + "\n", encoding="utf-8")
     os.replace(tmp_path, path)
     return path
