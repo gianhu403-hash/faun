@@ -9,6 +9,45 @@ the git log and `~/.claude` project memory.
 
 ## [Unreleased]
 
+### Wave 3 — presence soft-gate + serve-time calibration (ADR-0007)
+
+Two additive signals inside `Perch2Adapter.classify`, both computed from the
+SAME logits (zero extra inference) and **OFF by default** — with
+`FAUN_PRESENCE_GATE_K=0` (default) and no `PERCH_V2_CALIBRATOR_PATH`, the served
+`probability` is the raw logit, byte-for-byte (golden gate green).
+
+#### Added
+- **Presence soft-gate (FR-003).** `_load_bird_mask()` reads
+  `assets/perch_v2_ebird_classes.csv` (bird = eBird code ≠ `no_ebird_code`) to
+  weight predictions by the segment's bird-mass. `k=FAUN_PRESENCE_GATE_K`: `k=0`
+  is a LITERAL raw-logit no-op (not the formula at k=0, which would silently swap
+  the logit for a softmax prob); `k>0` returns `clamp01(p_species·(1+p_bird·k))`.
+  Math in unit-tested free functions `_softmax` / `bird_presence_mass` /
+  `apply_presence_gate`. Fail-open: missing/unreadable/length-mismatched asset
+  disables the gate with a warning.
+- **Serve-time calibration (FR-006-serve).** `Prediction.prob_calibrated:
+  float|None` (optional, default None). When `PERCH_V2_CALIBRATOR_PATH` points at
+  a pickled `TemperatureCalibrator`, `classify` fills `prob_calibrated` with
+  `softmax(logits/T)[i] ∈ [0,1]` from the RAW logits, independent of the gate.
+  `Label.from_prediction` threads it into `detections.jsonl` (no `api.py`
+  change). Raw `probability` never overwritten; never a CSV column.
+- `presence_gate_k` (`FAUN_PRESENCE_GATE_K`, parsed `positive=False` so 0 is a
+  valid OFF) and `perch_v2_calibrator_path` (`PERCH_V2_CALIBRATOR_PATH`) in
+  `faun.settings`.
+
+#### Unchanged (guarantees)
+- Frozen CSV columns; `Prediction` extended only by an optional field (every
+  `Prediction(species, probability)` call stays valid); Perch 2 backbone
+  (`_prepare`/peak-norm) untouched; raw `probability` never rewritten.
+- Default-path output (k=0, no calibrator) is byte-for-byte the `main@8c24ca9`
+  golden baseline.
+
+#### Notes
+- The mechanism ships, not a fitted `k` or a deployed calibrator. Calibration is
+  only measurable on iNatSounds heads (domain shift, METRICS_HONESTY §10.4);
+  tuning `k` wants reserve audio. Cluster validation is a best-effort follow-up,
+  not a merge gate.
+
 ### Wave 2 — honest segmentation + per-recording smoothing (ADR-0006)
 
 Recall and denoising levers for bird song (the onset detector was tuned for

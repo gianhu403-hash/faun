@@ -241,3 +241,34 @@ def write_prob_smoothed(path, detections, *, window=3)->Path   # atomic.
 # faun/settings: + prob_smoothing (FAUN_PROB_SMOOTHING, default False). When set, run_pipeline
 #   writes prob_smoothed.json after the streaming loop; unset -> no file (prod job dir unchanged).
 ```
+
+## v8 additions — presence soft-gate + serve-time calibration (ADDITIVE)
+
+Added by the Wave-3 (ADR-0007) wave. CSV columns frozen; `Prediction` is extended ONLY by
+an optional field with a default (back-compat). Both signals live in `Perch2Adapter.classify`,
+computed from the same logits, OFF by default — default-path output is byte-identical.
+
+```python
+# faun/classification: Prediction gains an optional calibrated-probability sidecar field.
+@dataclass class Prediction(species: str, probability: float, prob_calibrated: float|None=None)
+#   probability stays the model's own score (raw logit on the Perch 2 path); prob_calibrated is
+#   None unless a calibrator is configured (sidecar-only, never a CSV column). Every existing
+#   2-arg Prediction(species, probability) call stays valid.
+
+# faun/classification/perch_v2 (ADR-0007): presence soft-gate + serve calibration.
+def bird_presence_mass(scores, bird_mask)->float   # softmax mass over bird (eBird-coded) classes = p_bird
+def apply_presence_gate(p_species, p_bird, k)->float  # clamp01(p_species*(1+p_bird*k)); TF-free free funcs
+class Perch2Adapter:
+#   _load_bird_mask()->np.ndarray|None  # reads assets/perch_v2_ebird_classes.csv (bird = code != no_ebird_code);
+#     fail-open None on missing/unreadable/length-mismatch (gate no-op + warning). cached. TF-free.
+#   classify(): FR-003 gate — k=FAUN_PRESENCE_GATE_K; k==0 LITERAL raw-logit early-return (NOT formula@0);
+#     k>0 -> clamp01(p_species*(1+p_bird*k)) over softmax. FR-006-serve — when PERCH_V2_CALIBRATOR_PATH set,
+#     prob_calibrated = softmax(logits/T)[i] from RAW logits (via faun.retraining.apply_calibration),
+#     independent of the gate. raw probability never overwritten.
+PERCH_V2_EBIRD_FILE = "perch_v2_ebird_classes.csv"; NO_EBIRD_CODE = "no_ebird_code"
+
+# faun/detections: Label.from_prediction now threads pred.prob_calibrated (getattr, back-compat) into
+#   Label.prob_calibrated -> detections.jsonl. api._build_labels propagates it with NO api.py change.
+# faun/settings: + presence_gate_k (FAUN_PRESENCE_GATE_K, _env_float positive=False so 0 = valid OFF)
+#   + perch_v2_calibrator_path (PERCH_V2_CALIBRATOR_PATH). Both unset/0 -> served output unchanged.
+```

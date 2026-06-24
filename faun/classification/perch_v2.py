@@ -506,7 +506,10 @@ class Perch2Adapter:
 
         if k > 0 and bird_mask is not None:
             probs = _softmax(scores)
-            p_bird = float(np.sum(probs[bird_mask]))
+            # Use the unit-tested free function (not a re-inlined copy) so the
+            # shipped p_bird math is exactly what tests cover. The extra softmax
+            # inside it is negligible next to the TF inference above.
+            p_bird = bird_presence_mass(scores, bird_mask)
 
             def _prob(i: int) -> float:
                 return apply_presence_gate(float(probs[i]), p_bird, k)
