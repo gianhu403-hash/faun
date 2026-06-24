@@ -602,13 +602,29 @@ def get_segment_spectrogram(job_id: str, detection_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="segment not found")
     png = job_dir / SEGMENTS_DIR / f"{detection_id}.png"
     if not png.is_file():
+        import os
+        import tempfile
+
         import soundfile as sf
 
         from faun.spectrogram import save_spectrogram_png
 
         try:
             wav, sr = sf.read(str(clip), dtype="float64", always_2d=False)
-            save_spectrogram_png(wav, int(sr), png)
+            # Render to a UNIQUE temp file (suffix .png so matplotlib picks the
+            # PNG format) then atomically rename, so a concurrent double-miss on
+            # the same clip can never serve a half-written PNG (mirrors
+            # faun.detections.write_detections' tmp+replace idiom).
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(png.parent), prefix=f".{detection_id}.", suffix=".png"
+            )
+            os.close(fd)
+            tmp = Path(tmp_name)
+            try:
+                save_spectrogram_png(wav, int(sr), tmp)
+                tmp.replace(png)
+            finally:
+                tmp.unlink(missing_ok=True)  # no-op if replace already moved it
         except Exception as exc:  # noqa: BLE001 — surface render failure as 500
             logger.exception("spectrogram render failed for %s", detection_id)
             raise HTTPException(
