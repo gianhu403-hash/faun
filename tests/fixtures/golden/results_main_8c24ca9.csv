@@ -1,0 +1,6 @@
+track,start_sec,duration_sec,species,probability
+A1,2.23,3.77,Turdus merula,13.2734
+A1,2.23,3.77,Erithacus rubecula,11.8421
+A1,2.23,3.77,Fringilla coelebs,9.5102
+A1,2.23,3.77,Cyanistes caeruleus,7.441
+A1,2.23,3.77,Sturnus vulgaris,5.129
