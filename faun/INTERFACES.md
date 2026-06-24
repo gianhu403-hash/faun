@@ -272,3 +272,37 @@ PERCH_V2_EBIRD_FILE = "perch_v2_ebird_classes.csv"; NO_EBIRD_CODE = "no_ebird_co
 # faun/settings: + presence_gate_k (FAUN_PRESENCE_GATE_K, _env_float positive=False so 0 = valid OFF)
 #   + perch_v2_calibrator_path (PERCH_V2_CALIBRATOR_PATH). Both unset/0 -> served output unchanged.
 ```
+
+## v9 additions — prototypical probe with a negative class (ADDITIVE)
+
+Added by the Wave-4 (ADR-0008) wave. Every FROZEN signature above is unchanged;
+`train_probe_cv`, `save_probe`/`load_probe` and the served `PerchProbeAdapter`
+are untouched. The new probe is a drop-in for the UNCHANGED adapter — it satisfies
+the same `predict_proba(X)->(N,C)` / `classes_` pickle contract.
+
+```python
+# faun/retraining (ADR-0008): prototypical (nearest-centroid) probe with an
+#   optional negative (background / OOD) class — BESIDE train_probe_cv (LogReg).
+NEGATIVE_CLASS = "__negative__"   # distinct class the probe predicts (NOT the "unknown"
+#   species token, NOT STATUS_REJECTED). An OOD embedding near the negative prototype
+#   is classified __negative__ instead of a confident bird.
+def train_prototype_probe(X, y, *, negatives=None, metric="cosine", temperature=1.0)
+#   -> _PrototypeProbe. One centroid per class; predict_proba = softmax over per-class
+#   similarity logits (rows sum to 1, in [0,1]). metric "cosine" (L2-normalize) | "euclidean"
+#   (neg squared distance). DETERMINISTIC (no seed/torch), dimension-agnostic. When
+#   negatives ((M,D) non-bird embeddings) is given, adds a NEGATIVE_CLASS prototype;
+#   negatives=None -> plain multiclass. DROP-IN for the unchanged PerchProbeAdapter
+#   (same predict_proba/classes_; pickles via save_probe/load_probe + YAMNetAdapter).
+class _PrototypeProbe(metric="cosine", temperature=1.0)
+#   .fit(X, y, *, negatives=None)->self; .predict_proba(X)->(N,C); .predict(X)->labels;
+#   .classes_ (ndarray, column-aligned); .prototypes_ (C,D); .n_features_in_.
+
+# scripts/eval_inatsounds_perchv2.py (additive, cluster-only): --prototype trains the
+#   prototype probe on the SAME disjoint train split and reports held-out macro-F1 next
+#   to the LogReg-0.834 baseline on the SAME disjoint val (#H2 leakage guards unchanged);
+#   --negatives-from <dir> embeds non-bird clips as the negative class. Summary JSON gains
+#   prototype_heldout_macro_f1 / prototype_heldout_accuracy / prototype_has_negative_class.
+#   Without --prototype the script's default behaviour/output is byte-for-byte unchanged.
+#   HONESTY: ships the MECHANISM; whether it beats 0.834 (SC-D2) is a cluster measurement
+#   NOT run here. 0.834 is iNatSounds held-out, NOT raw180 serving accuracy (METRICS_HONESTY §10).
+```

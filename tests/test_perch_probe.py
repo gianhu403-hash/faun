@@ -106,3 +106,67 @@ def test_module_import_is_tf_free():
 
     assert "tensorflow" not in sys.modules
     assert "kagglehub" not in sys.modules
+
+
+# ---------------------------------------------------------------------------
+# FR-007: the prototype probe (with a negative class) is a drop-in for the
+# UNCHANGED PerchProbeAdapter — round-trips through save_probe/load_probe and
+# classifies via the existing predict_proba/classes_ path (no TF).
+# ---------------------------------------------------------------------------
+
+
+def _clustered(seed: int, *, dim: int = 1536, per: int = 12):
+    """Three bird clusters + a separated negative cluster; returns centers too."""
+    rng = np.random.default_rng(seed)
+    centers = rng.standard_normal((4, dim)) * 6.0
+
+    def cloud(c, n):
+        return c + 0.05 * rng.standard_normal((n, dim))
+
+    X = np.vstack([cloud(centers[i], per) for i in range(3)])
+    y = np.array(sum(([f"sp{i}"] * per for i in range(3)), []))
+    negatives = cloud(centers[3], per)
+    return X, y, negatives, centers
+
+
+class _CentroidEmbedder:
+    """Embedder stand-in that always returns a fixed 1536-d vector (a centroid)."""
+
+    def __init__(self, vec) -> None:
+        self.vec = np.asarray(vec, dtype=np.float32)
+
+    def embed(self, waveform, sr):
+        return self.vec
+
+
+def test_prototype_probe_round_trip_classifies_via_adapter(tmp_path):
+    """SC-D1: save -> load -> PerchProbeAdapter(probe=loaded) classifies (no TF)."""
+    from faun.retraining import (
+        NEGATIVE_CLASS,
+        load_probe,
+        save_probe,
+        train_prototype_probe,
+    )
+
+    X, y, negatives, centers = _clustered(seed=11)
+    probe = train_prototype_probe(X, y, negatives=negatives)
+
+    out = tmp_path / "prototype.pkl"
+    save_probe(probe, out)
+    loaded = load_probe(out)
+    assert np.array_equal(loaded.classes_, probe.classes_)
+
+    # A query AT the sp0 bird centroid -> top prediction is sp0.
+    adapter = PerchProbeAdapter(probe=loaded, top_k=5)
+    adapter._embedder = _CentroidEmbedder(centers[0])
+    preds = adapter.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert all(isinstance(p, Prediction) for p in preds)
+    assert preds[0].species == "sp0"
+    probs = [p.probability for p in preds]
+    assert probs == sorted(probs, reverse=True)
+
+    # A query AT the negative centroid -> the adapter surfaces NEGATIVE_CLASS.
+    adapter_neg = PerchProbeAdapter(probe=loaded, top_k=5)
+    adapter_neg._embedder = _CentroidEmbedder(centers[3])
+    preds_neg = adapter_neg.classify(np.zeros(32_000, dtype=np.float32), sr=32_000)
+    assert preds_neg[0].species == NEGATIVE_CLASS
