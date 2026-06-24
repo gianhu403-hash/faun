@@ -11,3 +11,6 @@ aiofiles==25.1.0
 httpx==0.28.1
 scipy==1.14.1
 scikit-learn==1.5.0
+# Spectrogram PNG rendering for the review UI (FR-008); Agg backend, imported
+# lazily in faun/spectrogram.py so it never loads at import time.
+matplotlib==3.9.2

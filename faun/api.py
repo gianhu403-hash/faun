@@ -585,6 +585,38 @@ def get_segment(job_id: str, detection_id: str) -> FileResponse:
     return FileResponse(str(clip), media_type="audio/wav")
 
 
+@app.get("/jobs/{job_id}/segments/{detection_id}.png")
+def get_segment_spectrogram(job_id: str, detection_id: str) -> FileResponse:
+    """Serve a detection clip's spectrogram PNG (FR-008), rendered lazily.
+
+    Mirrors :func:`get_segment` — same hex-id traversal guard — and renders the
+    PNG from the existing ``segments/<id>.wav`` on first request, caching it next
+    to the clip so subsequent loads (and the review grid's lazy <img>s) are a
+    plain file read. A render failure is a 500, never a crash of the route.
+    """
+    if not _DETECTION_ID_RE.match(detection_id):
+        raise HTTPException(status_code=404, detail="segment not found")
+    job_dir = _job_dir_or_404(job_id)
+    clip = job_dir / SEGMENTS_DIR / f"{detection_id}.wav"
+    if not clip.is_file():
+        raise HTTPException(status_code=404, detail="segment not found")
+    png = job_dir / SEGMENTS_DIR / f"{detection_id}.png"
+    if not png.is_file():
+        import soundfile as sf
+
+        from faun.spectrogram import save_spectrogram_png
+
+        try:
+            wav, sr = sf.read(str(clip), dtype="float64", always_2d=False)
+            save_spectrogram_png(wav, int(sr), png)
+        except Exception as exc:  # noqa: BLE001 — surface render failure as 500
+            logger.exception("spectrogram render failed for %s", detection_id)
+            raise HTTPException(
+                status_code=500, detail="spectrogram render failed"
+            ) from exc
+    return FileResponse(str(png), media_type="image/png")
+
+
 @app.post("/jobs/{job_id}/detections/{detection_id}/label")
 def add_label(job_id: str, detection_id: str, req: LabelRequest) -> dict:
     """Append a human label to a detection (concurrency-safe read-modify-write).
