@@ -424,3 +424,12 @@ class TestProbSmoothed:
         data = json.loads(out_path.read_text(encoding="utf-8"))
         assert data["recordings"][0]["recording"] == "REC.wav"
         assert data["window"] == 3
+
+    def test_window_larger_than_series_averages_all(self) -> None:
+        # window=5 but only 2 points -> each smoothed value is the whole-series mean.
+        dets = [
+            _det_at("A1", "REC.wav", 0.0, _pseudo("Parus major", 0.2)),
+            _det_at("A1", "REC.wav", 3.0, _pseudo("Parus major", 0.8)),
+        ]
+        pts = prob_smoothed(dets, window=5)["recordings"][0]["species"][0]["points"]
+        assert [p["probability_smoothed"] for p in pts] == [0.5, 0.5]

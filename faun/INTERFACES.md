@@ -212,3 +212,32 @@ def expected_calibration_error(probs, y_true, *, classes=None, n_bins=15)->float
 #   + Label.prob_calibrated: float|None (detections.jsonl sidecar ONLY, never a CSV column; raw
 #   probability untouched). to_dict/from_dict additive; pre-FR-006 records load with None.
 ```
+
+## v7 additions — honest segmentation + per-recording smoothing (ADDITIVE)
+
+Added by the Wave-2 (ADR-0006) wave. The frozen `extract(waveform, sr)` signature and
+the CSV columns are unchanged; new knobs are keyword-only constructor params (default =
+legacy behaviour) and a new env-gated sidecar. All segment pruning runs INSIDE
+`extract()`, so the clip↔detection row-alignment (ADR-0003) is preserved.
+
+```python
+# faun/segmentation: SegmentExtractor gains keyword-only honest-segmentation knobs,
+#   every one OFF / no-op by default (default path is byte-identical to the legacy onset path):
+class SegmentExtractor(*, ..., dense_windows=False, window_s=5.0, hop_s=2.5,
+                       silence_filter=False, nms_iou=None)
+#   dense_windows: replace onset detection with a window_s grid hopped by hop_s (recall).
+#   silence_filter: drop windows whose whole-window 16 kHz RMS <= onset.MIN_ABSOLUTE_ENERGY.
+#   nms_iou: None = legacy construction-time overlap drop, exactly; float in (0,1] = greedy
+#     TEMPORAL IoU suppression (keep earlier; strict IoU > threshold). Temporal only — extract
+#     is classifier-free (no per-species NMS possible here). extract(waveform, sr) UNCHANGED.
+#   NOTE: no operator seam yet — run_batch still builds a default SegmentExtractor(); wiring
+#   these through faun.settings is a documented follow-up (ADR-0006).
+
+# faun/output (ADR-0006): per-recording, per-species probability smoothing (sidecar).
+def prob_smoothed(detections, *, window=3)->dict      # {pipeline_version, smoothing, window,
+#   recordings:[{recording, species:[{species, points:[{start_s, probability, probability_smoothed}]}]}]}
+#   best-label-per-detection, time-ordered, centered edge-clamped moving average; raw probability untouched.
+def write_prob_smoothed(path, detections, *, window=3)->Path   # atomic.
+# faun/settings: + prob_smoothing (FAUN_PROB_SMOOTHING, default False). When set, run_pipeline
+#   writes prob_smoothed.json after the streaming loop; unset -> no file (prod job dir unchanged).
+```

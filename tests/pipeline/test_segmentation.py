@@ -213,6 +213,22 @@ class TestHonestSegmentation:
         # 0–2, 2–4, 4–6 are disjoint (IoU 0) -> all kept.
         assert [round(s.start_s, 2) for s in segs] == [0.0, 2.0, 4.0]
 
+    def test_nms_threshold_is_strict_keep_on_equality(self) -> None:
+        """Suppression is strict (IoU > threshold), so IoU == threshold is kept.
+
+        2 s windows @ 1 s hop -> adjacent windows overlap 1 s, IoU = 1/3. With
+        nms_iou exactly 1/3 the adjacent pair is on the boundary and retained;
+        a hair below it suppresses.
+        """
+        wav = self._two_bursts_6s()
+        kept_eq = SegmentExtractor(
+            dense_windows=True, window_s=2.0, hop_s=1.0, nms_iou=1.0 / 3.0
+        ).extract(wav, SR_48K)
+        kept_lo = SegmentExtractor(
+            dense_windows=True, window_s=2.0, hop_s=1.0, nms_iou=0.33
+        ).extract(wav, SR_48K)
+        assert len(kept_eq) > len(kept_lo)  # boundary kept vs just-below suppressed
+
     def test_invalid_new_params_raise(self) -> None:
         with pytest.raises(ValueError):
             SegmentExtractor(window_s=0.0)

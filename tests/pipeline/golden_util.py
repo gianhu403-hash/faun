@@ -133,6 +133,7 @@ def run_golden(tmp_path: Path) -> tuple[bytes, str]:
 
     for var in (
         "FAUN_SPECIES_ALLOWLIST",
+        "FAUN_PROB_SMOOTHING",
         "FAUN_PRESENCE_GATE_K",
         "PERCH_V2_CALIBRATOR_PATH",
     ):

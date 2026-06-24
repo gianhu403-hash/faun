@@ -59,9 +59,12 @@ class SegmentExtractor:
             ``window_s``-long windows hopped by ``hop_s`` (recall for sustained
             song the onset detector misses). The onset path stays the default.
         window_s / hop_s: dense-grid geometry (only used when ``dense_windows``).
-        silence_filter: drop produced windows whose RMS energy is at or below the
-            onset detector's silence floor (``onset.MIN_ABSOLUTE_ENERGY``) — most
-            useful to prune empty dense windows.
+        silence_filter: drop produced windows whose whole-window RMS energy is at
+            or below the onset detector's silence floor
+            (``onset.MIN_ABSOLUTE_ENERGY``) — most useful to prune empty dense
+            windows. This is whole-window RMS, an approximation of (and slightly
+            more aggressive than) the detector's per-frame energy gate, not the
+            same test; it is a coarse empties filter, not an onset re-derivation.
         nms_iou: when set (0, 1], greedily suppress later segments whose temporal
             IoU with an already-kept one exceeds the threshold. ``None`` keeps the
             existing construction-time "onset inside the previous segment" drop
@@ -200,11 +203,13 @@ class SegmentExtractor:
         return segments
 
     def _drop_silent(self, segments: list[Segment], audio: np.ndarray) -> list[Segment]:
-        """Drop segments whose 16 kHz RMS energy is at/below the silence floor.
+        """Drop segments whose whole-window 16 kHz RMS is at/below the silence floor.
 
-        Reuses ``faun.ml.onset.MIN_ABSOLUTE_ENERGY`` (the detector's own floor),
-        so a window the onset path would never trigger on is pruned consistently
-        (FR-002b). RMS matches the energy metric the onset detector uses.
+        Reuses ``faun.ml.onset.MIN_ABSOLUTE_ENERGY`` (the detector's own floor
+        constant) as the threshold, so the prune is anchored to the same floor the
+        onset detector uses (FR-002b). The metric here is whole-window RMS, NOT the
+        detector's per-frame peak energy — a coarser, slightly more aggressive
+        empties filter, used mainly to drop all-silence dense windows.
         """
         kept: list[Segment] = []
         for seg in segments:
