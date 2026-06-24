@@ -51,6 +51,7 @@ def test_defaults_when_env_empty(monkeypatch) -> None:
         "PERCH_V2_MODEL_PATH",
         "PERCH_MODEL_PATH",
         "YAMNET_PROBE_PATH",
+        "FAUN_SPECIES_ALLOWLIST",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -69,6 +70,7 @@ def test_defaults_when_env_empty(monkeypatch) -> None:
     assert s.perch_v2_model_path is None
     assert s.perch_model_path is None
     assert s.yamnet_probe_path is None
+    assert s.species_allowlist is None
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,7 @@ def test_reads_each_var(monkeypatch) -> None:
     monkeypatch.setenv("PERCH_V2_MODEL_PATH", "/models/perch2")
     monkeypatch.setenv("PERCH_MODEL_PATH", "/models/perch1")
     monkeypatch.setenv("YAMNET_PROBE_PATH", "/models/probe.pkl")
+    monkeypatch.setenv("FAUN_SPECIES_ALLOWLIST", "/etc/faun/reserve.txt")
 
     s = Settings.from_env()
 
@@ -103,6 +106,7 @@ def test_reads_each_var(monkeypatch) -> None:
     assert s.perch_v2_model_path == "/models/perch2"
     assert s.perch_model_path == "/models/perch1"
     assert s.yamnet_probe_path == "/models/probe.pkl"
+    assert s.species_allowlist == "/etc/faun/reserve.txt"
 
 
 @pytest.mark.parametrize(

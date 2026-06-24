@@ -18,7 +18,18 @@ from faun.output import (
     CsvWriter,
     ResultRow,
     TrapMeta,
+    species_presence,
+    write_species_presence,
 )
+from faun.detections import (
+    Detection,
+    Label,
+    SOURCE_PERCH_V2,
+    SOURCE_RANGER,
+    STATUS_CORRECTED,
+    STATUS_PSEUDO,
+)
+from faun.segmentation import Segment
 
 
 # ---------------------------------------------------------------------------
@@ -228,3 +239,104 @@ class TestStreaming:
         w = CsvWriter.open(tmp_path / "results.csv")
         with pytest.raises(RuntimeError):
             w.write_row(ResultRow("t.wav", 0.0, 1.0, "x", 0.5))
+
+
+# ---------------------------------------------------------------------------
+# Species presence aggregate (species_presence.json) — FR-005, ADR-0004
+# ---------------------------------------------------------------------------
+
+
+def _det(trap: str, fname: str, *labels: Label) -> Detection:
+    return Detection.new(
+        trap_id=trap,
+        source_file=fname,
+        segment=Segment(1.0, 5.0),
+        labels=list(labels),
+    )
+
+
+def _pseudo(species: str, prob: float) -> Label:
+    return Label.now(species, prob, SOURCE_PERCH_V2, STATUS_PSEUDO)
+
+
+class TestSpeciesPresence:
+    def test_groups_by_trap_and_day(self) -> None:
+        dets = [
+            _det("A1", "REC_20260610_213000.wav", _pseudo("Turdus merula", 0.91)),
+            _det("A1", "REC_20260610_220000.wav", _pseudo("Turdus merula", 0.80)),
+            _det("A1", "REC_20260611_060000.wav", _pseudo("Parus major", 0.70)),
+        ]
+        out = species_presence(dets)
+        keys = [(g["trap_id"], g["day"]) for g in out["groups"]]
+        assert keys == [("A1", "2026-06-10"), ("A1", "2026-06-11")]
+        day0 = out["groups"][0]
+        assert day0["n_detections"] == 2
+        assert day0["species"][0]["species"] == "Turdus merula"
+        assert day0["species"][0]["detections"] == 2
+        assert day0["species"][0]["max_probability"] == 0.91
+        assert day0["species"][0]["mean_probability"] == 0.855
+
+    def test_ground_truth_label_wins(self) -> None:
+        det = _det(
+            "A2",
+            "REC_20260610_050000.wav",
+            _pseudo("Strix aluco", 0.30),
+            Label.now("Bubo bubo", None, SOURCE_RANGER, STATUS_CORRECTED),
+        )
+        out = species_presence([det])
+        sp = out["groups"][0]["species"]
+        assert [s["species"] for s in sp] == ["Bubo bubo"]
+        # human label carries no probability -> stats are null, count still 1.
+        assert sp[0]["detections"] == 1
+        assert sp[0]["max_probability"] is None
+        assert sp[0]["mean_probability"] is None
+
+    def test_unparseable_filename_day_is_null(self) -> None:
+        out = species_presence([_det("A3", "weird.wav", _pseudo("Corvus corax", 0.5))])
+        assert out["groups"][0]["day"] is None
+
+    def test_count_invariant_total_equals_detections(self) -> None:
+        """Sum of group n_detections == number of detections; per-species sum ==
+        attributed (an all-masked-out detection is counted but unattributed)."""
+        dets = [
+            _det("A1", "REC_20260610_213000.wav", _pseudo("Turdus merula", 0.9)),
+            _det("A1", "REC_20260610_220000.wav", _pseudo("Parus major", 0.6)),
+            _det("A1", "REC_20260610_223000.wav"),  # no labels (all masked out)
+        ]
+        out = species_presence(dets)
+        total = sum(g["n_detections"] for g in out["groups"])
+        attributed = sum(s["detections"] for g in out["groups"] for s in g["species"])
+        assert total == len(dets) == 3
+        assert attributed == 2  # the unlabeled detection is counted, not attributed
+
+    def test_best_label_is_argmax(self) -> None:
+        det = _det(
+            "A1",
+            "REC_20260610_213000.wav",
+            _pseudo("unknown", 0.42),
+            _pseudo("Turdus merula", 0.91),
+        )
+        out = species_presence([det])
+        assert [s["species"] for s in out["groups"][0]["species"]] == ["Turdus merula"]
+
+    def test_species_sorted_by_count_then_name(self) -> None:
+        dets = [
+            _det("A1", "REC_20260610_010000.wav", _pseudo("Parus major", 0.9)),
+            _det("A1", "REC_20260610_020000.wav", _pseudo("Turdus merula", 0.9)),
+            _det("A1", "REC_20260610_030000.wav", _pseudo("Turdus merula", 0.9)),
+        ]
+        sp = species_presence(dets)["groups"][0]["species"]
+        assert [s["species"] for s in sp] == ["Turdus merula", "Parus major"]
+
+    def test_empty_detections(self) -> None:
+        out = species_presence([])
+        assert out["groups"] == []
+        assert out["pipeline_version"] == PIPELINE_VERSION
+
+    def test_write_species_presence_round_trips(self, tmp_path: Path) -> None:
+        det = _det("A1", "REC_20260610_213000.wav", _pseudo("Turdus merula", 0.91))
+        out_path = write_species_presence(tmp_path / "species_presence.json", [det])
+        assert out_path.is_file()
+        data = json.loads(out_path.read_text(encoding="utf-8"))
+        assert data["groups"][0]["trap_id"] == "A1"
+        assert data["groups"][0]["species"][0]["species"] == "Turdus merula"

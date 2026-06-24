@@ -43,6 +43,7 @@ Defaults (match the values faun.sources actually enforces):
     perch_model_path          ``None``        (PERCH_MODEL_PATH)
     yamnet_probe_path         ``None``        (YAMNET_PROBE_PATH)
     perch_v2_probe_path       ``None``        (PERCH_V2_PROBE_PATH)
+    species_allowlist         ``None``        (FAUN_SPECIES_ALLOWLIST)
 """
 
 from __future__ import annotations
@@ -200,6 +201,13 @@ class Settings:
     # yamnet_probe_path: an operator-supplied local pickle, never network input.
     perch_v2_probe_path: str | None = None
 
+    # Regional species allow-list (ADR-0004). Path to a checklist file (one
+    # binomial per line), or the literal "default"/"reserve" sentinel for the
+    # bundled reserve seed. UNSET -> the MaskedClassifier is OFF (prod output
+    # byte-for-byte unchanged); set -> the served top-k predictions are filtered
+    # to the listed species (an output filter, not a logit-argmax restriction).
+    species_allowlist: str | None = None
+
     # HTTP Basic Auth (env-gated). Both must be set to enable the site-wide
     # login gate in faun.api; either unset -> auth disabled (default-open).
     basic_user: str | None = None
@@ -238,6 +246,7 @@ class Settings:
             perch_model_path=_env_path_opt("PERCH_MODEL_PATH"),
             yamnet_probe_path=_env_path_opt("YAMNET_PROBE_PATH"),
             perch_v2_probe_path=_env_path_opt("PERCH_V2_PROBE_PATH"),
+            species_allowlist=_env_path_opt("FAUN_SPECIES_ALLOWLIST"),
             basic_user=_env_secret_opt("FAUN_BASIC_USER"),
             basic_pass=_env_secret_opt("FAUN_BASIC_PASS"),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),

@@ -382,3 +382,204 @@ class TestPerch:
         with patch.dict(sys.modules, {"tensorflow_hub": None}):
             with pytest.raises(RuntimeError, match="tensorflow_hub"):
                 adapter.classify(waveform, 32_000)
+
+
+# ---------------------------------------------------------------------------
+# MaskedClassifier — regional species allow-list (FR-001, ADR-0004)
+# ---------------------------------------------------------------------------
+
+
+class _FakeClf:
+    """Minimal SpeciesClassifier returning a fixed prediction list."""
+
+    def __init__(self, preds: list[Prediction]) -> None:
+        self._preds = preds
+
+    def classify(self, segment, sr) -> list[Prediction]:
+        return list(self._preds)
+
+
+_VOCAB = ["Fringilla coelebs", "Turdus merula", "Parus major", "Strix aluco"]
+
+
+class TestMaskedClassifier:
+    def _preds(self) -> list[Prediction]:
+        return [
+            Prediction("Turdus merula", 0.9),
+            Prediction("Zonotrichia leucophrys", 0.8),  # out-of-region
+            Prediction("Parus major", 0.4),
+        ]
+
+    def test_active_drops_out_of_region(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()),
+            ["Turdus merula", "Parus major", "Fringilla coelebs"],
+            vocab_provider=lambda: _VOCAB,
+        )
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == ["Turdus merula", "Parus major"]
+
+    def test_underscore_allowlist_is_normalized(self) -> None:
+        """A ``Genus_species`` checklist still matches the space-form vocab."""
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()),
+            ["Turdus_merula", "Parus_major"],
+            vocab_provider=lambda: _VOCAB,
+        )
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == ["Turdus merula", "Parus major"]  # non-empty, not a no-op miss
+
+    def test_case_insensitive_match(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()),
+            ["turdus MERULA"],
+            vocab_provider=lambda: _VOCAB,
+        )
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == ["Turdus merula"]
+
+    def test_coverage_below_floor_disables_mask(self, caplog) -> None:
+        """A mismatched/typo'd checklist → coverage below floor → no-op (fail-open)."""
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()),
+            ["Xxxx yyyy", "Aaaa bbbb"],  # nothing matches the vocab
+            vocab_provider=lambda: _VOCAB,
+        )
+        with caplog.at_level("WARNING"):
+            out = [p.species for p in m.classify(None, 16_000)]
+        assert out == [p.species for p in self._preds()]  # unchanged, NOT empty
+        assert any("coverage" in r.message for r in caplog.records)
+
+    def test_no_vocab_provider_is_noop(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(_FakeClf(self._preds()), ["Turdus merula"])
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == [p.species for p in self._preds()]
+
+    def test_empty_allowlist_is_noop(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(_FakeClf(self._preds()), [], vocab_provider=lambda: _VOCAB)
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == [p.species for p in self._preds()]
+
+    def test_vocab_provider_exception_is_noop(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        def _boom():
+            raise RuntimeError("vocab unavailable")
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()), ["Turdus merula"], vocab_provider=_boom
+        )
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == [p.species for p in self._preds()]  # fail-open
+
+    def test_species_fallback_names_disable_mask(self) -> None:
+        """``species_<i>`` fallback vocab never matches binomials → no-op."""
+        from faun.classification import MaskedClassifier
+
+        preds = [Prediction("species_3", 0.9), Prediction("species_7", 0.5)]
+        m = MaskedClassifier(
+            _FakeClf(preds),
+            ["Turdus merula", "Parus major"],
+            vocab_provider=lambda: ["species_0", "species_1", "species_2"],
+        )
+        out = [p.species for p in m.classify(None, 16_000)]
+        assert out == ["species_3", "species_7"]  # unchanged, not emptied
+
+    def test_inner_attribute_exposed_for_unwrap(self) -> None:
+        from faun.classification import MaskedClassifier
+
+        base = _FakeClf(self._preds())
+        m = MaskedClassifier(base, ["Turdus merula"], vocab_provider=lambda: _VOCAB)
+        assert m.inner is base
+
+    def test_masked_out_logged(self, caplog) -> None:
+        from faun.classification import MaskedClassifier
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()),
+            ["Turdus merula", "Parus major", "Fringilla coelebs"],
+            vocab_provider=lambda: _VOCAB,
+        )
+        with caplog.at_level("INFO"):
+            m.classify(None, 16_000)
+        assert any(
+            "masked_out=Zonotrichia leucophrys" in r.message for r in caplog.records
+        )
+
+    def test_coverage_gate_runs_once(self) -> None:
+        """The vocab provider is consulted only on the first classify."""
+        from faun.classification import MaskedClassifier
+
+        calls = {"n": 0}
+
+        def _vocab():
+            calls["n"] += 1
+            return _VOCAB
+
+        m = MaskedClassifier(
+            _FakeClf(self._preds()), ["Turdus merula"], vocab_provider=_vocab
+        )
+        m.classify(None, 16_000)
+        m.classify(None, 16_000)
+        assert calls["n"] == 1
+
+
+class TestLoadAllowlist:
+    def test_default_sentinel_loads_reserve_seed(self) -> None:
+        from faun.classification import load_allowlist
+
+        names = load_allowlist("default")
+        assert len(names) == 69
+        assert "Fringilla coelebs" in names
+        assert all(not n.startswith("#") for n in names)
+
+    def test_reserve_sentinel_equivalent(self) -> None:
+        from faun.classification import load_allowlist
+
+        assert load_allowlist("reserve") == load_allowlist("default")
+
+    def test_blank_spec_is_empty(self) -> None:
+        from faun.classification import load_allowlist
+
+        assert load_allowlist(None) == []
+        assert load_allowlist("   ") == []
+
+    def test_missing_file_returns_empty(self, tmp_path, caplog) -> None:
+        from faun.classification import load_allowlist
+
+        with caplog.at_level("WARNING"):
+            names = load_allowlist(str(tmp_path / "nope.txt"))
+        assert names == []
+        assert any("could not be read" in r.message for r in caplog.records)
+
+    def test_empty_file_returns_empty(self, tmp_path, caplog) -> None:
+        from faun.classification import load_allowlist
+
+        f = tmp_path / "empty.txt"
+        f.write_text("# only a comment\n\n", encoding="utf-8")
+        with caplog.at_level("WARNING"):
+            names = load_allowlist(str(f))
+        assert names == []
+        assert any("no entries" in r.message for r in caplog.records)
+
+    def test_file_parses_entries_skips_comments(self, tmp_path) -> None:
+        from faun.classification import load_allowlist
+
+        f = tmp_path / "list.txt"
+        f.write_text(
+            "# header\nTurdus merula\n\n  Parus major  \n# trailing\n",
+            encoding="utf-8",
+        )
+        assert load_allowlist(str(f)) == ["Turdus merula", "Parus major"]
