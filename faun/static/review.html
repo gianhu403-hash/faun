@@ -46,13 +46,26 @@
     <div class="empty-state hidden" id="det-empty">
       Для этой задачи нет детекций.
     </div>
+    <!-- Client-side filters (FR-010): narrow the rendered detections by species
+         substring and a minimum model confidence. Pure JS — no backend call. -->
+    <div class="filter-bar hidden" id="filter-bar">
+      <div>
+        <label for="filter-species">Вид содержит</label>
+        <input type="text" id="filter-species" placeholder="напр. Turdus" />
+      </div>
+      <div>
+        <label for="filter-minconf">Мин. уверенность</label>
+        <input type="number" id="filter-minconf" step="0.01" min="0" placeholder="0" />
+      </div>
+      <span class="filter-count" id="filter-count"></span>
+    </div>
     <div class="table-wrap">
       <table id="det-table" class="hidden">
         <thead>
           <tr>
             <th>ловушка</th>
             <th>время</th>
-            <th>аудио</th>
+            <th>аудио + спектрограмма</th>
             <th>текущая метка</th>
             <th>переразметка</th>
           </tr>
@@ -115,7 +128,19 @@ function renderDetectionRow(det) {
   const audio = $("audio-tpl").content.firstElementChild.cloneNode(true);
   audio.src = "/jobs/" + JOB_ID + "/segments/" + det.detection_id + ".wav";
   audioTd.appendChild(audio);
+  // Spectrogram thumbnail (FR-008), lazily fetched + server-side rendered only
+  // when it scrolls into view, so a long list stays cheap.
+  const spectro = document.createElement("img");
+  spectro.className = "spectro";
+  spectro.loading = "lazy";
+  spectro.alt = "спектрограмма";
+  spectro.src = "/jobs/" + JOB_ID + "/segments/" + det.detection_id + ".png";
+  audioTd.appendChild(spectro);
   tr.appendChild(audioTd);
+
+  // Stash the current species + probability on the row so the client-side
+  // filter (FR-010) can show/hide without re-reading the cells.
+  setRowFilterData(tr, det);
 
   const labelTd = document.createElement("td");
   labelTd.className = "label-cell";
@@ -159,6 +184,10 @@ function renderDetectionRow(det) {
       );
       // Update the row in place from the returned detection.
       renderLabelCell(labelTd, updated);
+      // Re-stash filter data + re-apply: the new species may move the row in or
+      // out of the active filter.
+      setRowFilterData(tr, updated);
+      applyFilters();
     } catch (err) {
       rowErr.textContent = "Ошибка: " + err.message;
       rowErr.classList.remove("hidden");
@@ -168,6 +197,39 @@ function renderDetectionRow(det) {
   });
 
   return tr;
+}
+
+/* Stash the row's current species (lowercased) + numeric probability as data
+   attributes so applyFilters() can match without touching the DOM cells. */
+function setRowFilterData(tr, det) {
+  const lab = currentLabel(det);
+  tr.dataset.species = lab && lab.species ? lab.species.toLowerCase() : "";
+  tr.dataset.prob =
+    lab && typeof lab.probability === "number" ? String(lab.probability) : "";
+}
+
+/* FR-010: show/hide rendered rows by species substring + minimum confidence.
+   A row whose current label has NO numeric probability (e.g. a human
+   correction) always passes the confidence filter — it is never noise. */
+function applyFilters() {
+  const term = ($("filter-species").value || "").trim().toLowerCase();
+  const minRaw = ($("filter-minconf").value || "").trim();
+  const minConf = minRaw === "" ? null : parseFloat(minRaw);
+  const rows = document.querySelectorAll("#det-body tr");
+  let shown = 0;
+  rows.forEach((tr) => {
+    const species = tr.dataset.species || "";
+    const probStr = tr.dataset.prob || "";
+    const okSpecies = !term || species.includes(term);
+    let okConf = true;
+    if (minConf !== null && !Number.isNaN(minConf) && probStr !== "") {
+      okConf = parseFloat(probStr) >= minConf;
+    }
+    const visible = okSpecies && okConf;
+    tr.classList.toggle("hidden", !visible);
+    if (visible) shown += 1;
+  });
+  $("filter-count").textContent = shown + " / " + rows.length;
 }
 
 async function loadDetections(jobId) {
@@ -197,6 +259,12 @@ async function loadDetections(jobId) {
   body.innerHTML = "";
   dets.forEach((det) => body.appendChild(renderDetectionRow(det)));
   $("det-table").classList.remove("hidden");
+
+  // Reveal + wire the client-side filters once there are rows (FR-010).
+  $("filter-bar").classList.remove("hidden");
+  $("filter-species").addEventListener("input", applyFilters);
+  $("filter-minconf").addEventListener("input", applyFilters);
+  applyFilters();
 }
 
 async function showPicker() {

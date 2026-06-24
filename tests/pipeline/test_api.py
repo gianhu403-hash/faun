@@ -289,6 +289,36 @@ def test_get_segment_rejects_traversal(client, tmp_path):
     assert resp2.status_code == 404
 
 
+def test_get_segment_spectrogram_ok(client, tmp_path):
+    """FR-008/SC-E1: the .png route renders a spectrogram and caches it."""
+    job_id, dets = _seed_job_with_detections(tmp_path / "jobs")
+    det_id = dets[0].detection_id
+    resp = client.get(f"/jobs/{job_id}/segments/{det_id}.png")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"  # real PNG magic bytes
+    # Second request hits the cached file (still a valid PNG).
+    again = client.get(f"/jobs/{job_id}/segments/{det_id}.png")
+    assert again.status_code == 200
+    assert again.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_get_segment_spectrogram_rejects_traversal(client, tmp_path):
+    job_id, _dets = _seed_job_with_detections(tmp_path / "jobs")
+    # Same hex-id guard as the .wav route (SC-E1).
+    resp = client.get(f"/jobs/{job_id}/segments/..%2F..%2Fsecret.png")
+    assert resp.status_code in (400, 404)
+    resp2 = client.get(f"/jobs/{job_id}/segments/not-a-real-id.png")
+    assert resp2.status_code == 404
+
+
+def test_get_segment_spectrogram_missing_clip_404(client, tmp_path):
+    job_id, _dets = _seed_job_with_detections(tmp_path / "jobs")
+    # A well-formed but unknown hex id has no clip -> 404, not a 500.
+    resp = client.get(f"/jobs/{job_id}/segments/{'a' * 32}.png")
+    assert resp.status_code == 404
+
+
 def test_post_label_appends_corrected(client, tmp_path):
     job_id, dets = _seed_job_with_detections(tmp_path / "jobs")
     det_id = dets[0].detection_id

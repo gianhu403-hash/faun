@@ -243,6 +243,80 @@ def test_retrain_model_routes_to_embedder(tmp_path, monkeypatch):
     assert seen["model"] is sentinel
 
 
+def test_export_raven_selection_table(tmp_path, capsys):
+    """FR-009/SC-E2: export-raven writes a valid Raven TSV with correct times +
+    the CURRENT (most recent) label species."""
+    import csv
+    import json
+
+    job = tmp_path / "job"
+    job.mkdir()
+    # det1: a model pseudo-label then a human correction -> currentLabel = the
+    # correction (last). det2: a single model label.
+    det1 = {
+        "detection_id": "det1",
+        "trap_id": "A1",
+        "source_file": "rec1.wav",
+        "segment": {"start_s": 2.5, "duration_s": 1.25},
+        "segment_path": "segments/det1.wav",
+        "labels": [
+            {
+                "species": "Turdus merula",
+                "probability": 0.9,
+                "source": "model:perch-v2",
+                "status": "pseudo",
+                "ts": "t",
+            },
+            {
+                "species": "Erithacus rubecula",
+                "probability": None,
+                "source": "operator:ranger",
+                "status": "corrected",
+                "ts": "t",
+            },
+        ],
+    }
+    det2 = {
+        "detection_id": "det2",
+        "trap_id": "A1",
+        "source_file": "rec2.wav",
+        "segment": {"start_s": 10.0, "duration_s": 2.0},
+        "segment_path": "segments/det2.wav",
+        "labels": [
+            {
+                "species": "Parus major",
+                "probability": 0.8,
+                "source": "model:stub",
+                "status": "pseudo",
+                "ts": "t",
+            },
+        ],
+    }
+    (job / "detections.jsonl").write_text(
+        json.dumps(det1) + "\n" + json.dumps(det2) + "\n", encoding="utf-8"
+    )
+
+    out = tmp_path / "raven.txt"
+    rc = main(["export-raven", "--job", str(job), "--out", str(out)])
+    assert rc == 0
+
+    rows = list(csv.DictReader(out.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 2
+    # Required Raven columns present.
+    assert {"Selection", "Begin Time (s)", "End Time (s)", "Species"} <= set(
+        rows[0].keys()
+    )
+    # det1: current label is the human correction; End = start + duration.
+    assert rows[0]["Selection"] == "1"
+    assert float(rows[0]["Begin Time (s)"]) == 2.5
+    assert float(rows[0]["End Time (s)"]) == 3.75
+    assert rows[0]["Species"] == "Erithacus rubecula"
+    # det2: the lone model label, times correct.
+    assert float(rows[1]["Begin Time (s)"]) == 10.0
+    assert float(rows[1]["End Time (s)"]) == 12.0
+    assert rows[1]["Species"] == "Parus major"
+
+
 def test_export_labels_keeps_only_ground_truth(tmp_path, capsys):
     """`export-labels` (VE) emits ONLY human confirmed/corrected labels as a retrain CSV."""
     import csv

@@ -306,3 +306,31 @@ class _PrototypeProbe(metric="cosine", temperature=1.0)
 #   HONESTY: ships the MECHANISM; whether it beats 0.834 (SC-D2) is a cluster measurement
 #   NOT run here. 0.834 is iNatSounds held-out, NOT raw180 serving accuracy (METRICS_HONESTY §10).
 ```
+
+## v10 additions — demo polish: spectrogram, Raven export, review filters (ADDITIVE)
+
+Added by the Wave-5 (ADR-0009) wave. Purely additive UI/CLI affordances — a new route,
+a new CLI subcommand, a new leaf module, static assets, one pinned dep. No pipeline-output
+change (the golden gate is untouched); CSV columns + frozen signatures intact; `faun/`
+still never imports from `experiments/`.
+
+```python
+# faun/spectrogram (NEW): self-contained log-STFT spectrogram PNG renderer (FR-008).
+def save_spectrogram_png(x, sr, out_path, *, n_fft=1024, hop=256) -> Path
+#   copy of experiments.common.save_spectrogram_png (NOT imported); matplotlib (Agg)
+#   imported LAZILY inside the function. matplotlib==3.9.2 pinned in requirements-pipeline.txt.
+
+# faun/api: GET /jobs/{id}/segments/{det}.png  (mirrors get_segment: same _DETECTION_ID_RE
+#   hex-id traversal guard) -> renders the clip's spectrogram lazily on first request and
+#   caches it atomically (temp + Path.replace) at segments/<det>.png; render failure -> 500.
+
+# faun/cli (additive): faun export-raven --job <dir> --out <tsv>  -> Raven Pro / Audacity
+#   selection table. Generic detections.jsonl parse (no faun.detections import, like
+#   export-clips). Columns: Selection, View, Channel, Begin Time (s)=start_s, End Time (s)=
+#   start_s+duration_s, Low/High Freq (Hz)=0/16000, Species=current (most recent) label,
+#   Source, Probability.
+
+# faun/static/review.html (+styles.css): per-detection <img loading=lazy> spectrogram
+#   thumbnail; client-side filter bar (species substring + min confidence; reuses
+#   currentLabel). Client JS only — no backend change.
+```

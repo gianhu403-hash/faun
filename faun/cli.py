@@ -55,6 +55,15 @@ def main(argv: list[str] | None = None) -> int:
         "--out", required=True, help="output labels CSV (feeds `faun retrain`)"
     )
 
+    exraven = sub.add_parser(
+        "export-raven",
+        help="export detections as a Raven/Audacity selection table (TSV)",
+    )
+    exraven.add_argument("--job", required=True, help="job dir with detections.jsonl")
+    exraven.add_argument(
+        "--out", required=True, help="output Raven selection table (.txt, TSV)"
+    )
+
     blabel = sub.add_parser(
         "batch-label",
         help="multi-model pseudo-labeling (Perch+BirdNET) of a trap archive",
@@ -191,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-labels":
         return _export_labels(Path(args.job), Path(args.out))
 
+    if args.command == "export-raven":
+        return _export_raven(Path(args.job), Path(args.out))
+
     if args.command == "batch-label":
         return _batch_label(args)
 
@@ -267,6 +279,76 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
                 if clip.exists():
                     zf.write(clip, seg_path)
         zf.writestr("clips_index.csv", index.getvalue())
+
+    print(out_path)
+    return 0
+
+
+def _export_raven(job_dir: Path, out_path: Path) -> int:
+    """Export detections as a Raven Pro / Audacity selection table (TSV).
+
+    Reads ``<job_dir>/detections.jsonl`` generically (one JSON object per line —
+    no import of ``faun.detections``, mirroring ``export-clips``) and writes a
+    tab-separated selection table an ornithologist can open directly in Raven Pro
+    or import into Audacity: one row per detection with ``Begin Time (s)`` =
+    ``start_s``, ``End Time (s)`` = ``start_s + duration_s``, and ``Species`` =
+    the detection's CURRENT label (the most recent label — what the review UI's
+    ``currentLabel`` shows, so a ranger's correction is what gets exported).
+    """
+    import csv
+    import json
+
+    jsonl = job_dir / "detections.jsonl"
+    detections = []
+    with open(jsonl, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                detections.append(json.loads(line))
+
+    # Raven Pro selection-table columns. Low/High Freq bound the classifier band
+    # (0–16 kHz); the expert refines the box. The clip sr is not in the jsonl, so
+    # the band is a fixed, honest default rather than a guessed per-row value.
+    fieldnames = [
+        "Selection",
+        "View",
+        "Channel",
+        "Begin Time (s)",
+        "End Time (s)",
+        "Low Freq (Hz)",
+        "High Freq (Hz)",
+        "Species",
+        "Source",
+        "Probability",
+    ]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for i, det in enumerate(detections, start=1):
+            segment = det.get("segment") or {}
+            start = float(segment.get("start_s") or 0.0)
+            duration = float(segment.get("duration_s") or 0.0)
+            labels = det.get("labels") or []
+            # currentLabel: the most recent label (a human correction is appended
+            # last), matching faun/static/app.js:currentLabel.
+            current = labels[-1] if labels else {}
+            prob = current.get("probability")
+            writer.writerow(
+                {
+                    "Selection": i,
+                    "View": "Spectrogram 1",
+                    "Channel": 1,
+                    "Begin Time (s)": round(start, 4),
+                    "End Time (s)": round(start + duration, 4),
+                    "Low Freq (Hz)": 0,
+                    "High Freq (Hz)": 16000,
+                    "Species": current.get("species", ""),
+                    "Source": current.get("source", ""),
+                    "Probability": "" if prob is None else prob,
+                }
+            )
 
     print(out_path)
     return 0
