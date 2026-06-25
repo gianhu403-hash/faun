@@ -15,8 +15,9 @@ GPU and without a human-labelled corpus:
 
 1. **No regional filter.** Zero-shot over a global 14 795-class head will, on
    noisy trap audio, occasionally return a *confident* species that does not
-   occur anywhere near a Nizhny Novgorod reserve. The honest measured number we
-   have (held-out macro-F1 **0.834** on 50 reserve species, iNatSounds — see
+   occur anywhere near the deployment region. The honest measured number we
+   have (held-out macro-F1 **0.834** on 50 species from an example Palearctic
+   iNatSounds subset — not a validated reserve checklist — see
    `experiments/report/METRICS_HONESTY.md` §10) says the backbone separates
    *regional* species well; it says nothing about suppressing out-of-region
    false positives, which a checklist trivially can.

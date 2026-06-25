@@ -73,7 +73,7 @@ frozen contract are all **unchanged** — this is purely additive.
   **0.8434** vs LogReg baseline **0.834** on the same 50-species held-out — the
   prototype **beats** the baseline by ~0.9 pts; calibration ECE **0.0431 →
   0.0330** (T≈0.83). **This does not change the deployment decision:** these are
-  iNatSounds reserve embeddings (not raw180 serving accuracy), and a 50-species
+  iNatSounds embeddings of the example regional subset (not raw180 serving accuracy), and a 50-species
   probe still loses ~14745-class zero-shot coverage. The probe is **not** wired
   into production; `train_probe_cv` stays the default trainer.
 - The 0.834 baseline is **iNatSounds held-out macro-F1, not raw180 serving
@@ -199,9 +199,10 @@ byte-for-byte identical to the previous build (golden-CSV diff gate).
   Case-insensitive, underscore-tolerant name matching (`_species_key`). Enabled
   by `FAUN_SPECIES_ALLOWLIST` (path, or `default`/`reserve` for the bundled
   seed); unset → no masking. Each dropped prediction logs `masked_out=<species>`.
-- **Default reserve checklist** `faun/data/reserve_checklist.txt` — 69 Palearctic
-  forest binomials (mirrors `scripts/extract_inatsounds_subset.py:RESERVE`),
-  refinable by the ornithologist.
+- **Default example checklist seed** `faun/data/reserve_checklist.txt` — 69 Palearctic
+  forest binomials (mirrors `scripts/extract_inatsounds_subset.py:RESERVE`); a
+  placeholder example assembled from general knowledge, **NOT a validated reserve
+  checklist** — to be replaced by the ornithologist's real list.
 - **Fail-loud, fail-open coverage gate.** If too few allow-list names match the
   classifier's own label vocabulary (typo / wrong checklist / `species_<i>`
   fallback), the mask disables itself with a warning instead of emptying the CSV.
@@ -223,6 +224,6 @@ byte-for-byte identical to the previous build (golden-CSV diff gate).
   while `FAUN_SPECIES_ALLOWLIST` is unset.
 
 #### Notes
-- The 0.834 macro-F1 (iNatSounds, 50 reserve species) is **not** raw180 serving
+- The 0.834 macro-F1 (iNatSounds, 50-species example Palearctic subset — not a validated reserve checklist) is **not** raw180 serving
   accuracy — see `experiments/report/METRICS_HONESTY.md` §10.4. raw180 accuracy
   remains unmeasured (needs ornithologist labelling).

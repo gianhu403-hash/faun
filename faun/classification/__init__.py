@@ -109,7 +109,8 @@ DEFAULT_COVERAGE_FLOOR = 0.5
 #: instead of a filesystem path.
 _ALLOWLIST_SENTINELS = frozenset({"default", "reserve"})
 
-#: Bundled default reserve checklist (copied from, and kept in sync with,
+#: Bundled default example checklist seed — a placeholder list, NOT a validated
+#: reserve checklist (copied from, and kept in sync with,
 #: ``scripts/extract_inatsounds_subset.py:RESERVE`` — NOT imported from scripts).
 RESERVE_CHECKLIST_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "reserve_checklist.txt"
