@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""extract_inatsounds_subset.py — curated reserve-bird subset of the iNatSounds val split.
+"""extract_inatsounds_subset.py — example regional-bird subset of the iNatSounds val split.
 
 ЗАЧЕМ
     Прошлой ночью видовую метрику считали ad-hoc на горстке видов. Этот скрипт
     обобщает извлечение: из архива iNatSounds-val (``val.tar.gz`` + ``val.json``)
-    выбирает ~40-60 видов птиц заповедной фауны Палеарктики и раскладывает их в
+    выбирает ~40-60 видов птиц из ПРИМЕРА палеарктической лесной фауны и раскладывает их в
     дерево ``root/<Genus_species>/<clip>.wav``, которое читает
     ``faun.datasets.iNatSoundsDataset`` (та же раскладка, что в
     ``tests/fixtures/inatsounds_mini/README``).
@@ -45,7 +45,9 @@ from collections import Counter
 logger = logging.getLogger("extract_inatsounds_subset")
 
 # ---------------------------------------------------------------------------
-# RESERVE — лесные птицы Палеарктики (биномиальные научные имена, verbatim).
+# RESERVE — ПРИМЕР-ПЛЕЙСХОЛДЕР: палеарктические лесные птицы (биномиальные имена,
+# verbatim), составлен по общим знаниям. НЕ авторитетный чеклист заповедника —
+# настоящий даёт орнитолог. Имя RESERVE — просто идентификатор артефакта.
 # ---------------------------------------------------------------------------
 RESERVE: list[str] = [
     "Fringilla coelebs",
@@ -147,7 +149,7 @@ def select_targets(
 
     Args:
         catalog: записи ``{"name","audio_dir_name","clip_count"}`` (только Aves).
-        reserve: биномиальные научные имена видов заповедной фауны.
+        reserve: биномиальные научные имена видов (пример-список, НЕ чеклист заповедника).
         n_species: верхняя граница числа выбранных видов.
         cap: переносится в каждую запись как потолок клипов/вид на ЭТАПЕ
             извлечения (на селекцию не влияет).

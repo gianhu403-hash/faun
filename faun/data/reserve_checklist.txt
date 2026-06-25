@@ -1,15 +1,16 @@
-# Reserve regional species allow-list (default seed for the MaskedClassifier, ADR-0004).
+# Example regional species allow-list seed (default seed for the MaskedClassifier, ADR-0004).
 #
 # One scientific binomial ("Genus species") per line. Lines starting with "#"
 # and blank lines are ignored. Matching is case-insensitive and tolerant of
 # underscores ("Genus_species") and extra whitespace (see faun.classification
 # _species_key / _binomial normalization).
 #
-# Provenance: Palearctic taiga / broad-leaved forest birds of the Nizhny Novgorod
-# reserve. This list mirrors scripts/extract_inatsounds_subset.py:RESERVE (69
-# species, kept in sync by hand — this file does NOT import scripts/). It is a
-# starting point to be refined by the reserve's ornithologist; edit freely or
-# point FAUN_SPECIES_ALLOWLIST at an operator-supplied file.
+# ВНИМАНИЕ — ПРОВЕНАНС: это НЕ авторитетный чеклист какого-либо заповедника. Список
+# составлен ассистентом ПО ОБЩИМ ОРНИТОЛОГИЧЕСКИМ ЗНАНИЯМ как ПРИМЕР палеарктической
+# таёжно-широколиственной лесной фауны; заповеднику его на вход не подавали. Настоящий
+# чеклист должен дать орнитолог. Список зеркалит scripts/extract_inatsounds_subset.py:RESERVE
+# (kept in sync by hand — этот файл НЕ импортирует scripts/). Правьте свободно или укажите
+# FAUN_SPECIES_ALLOWLIST на файл от оператора.
 
 Fringilla coelebs
 Fringilla montifringilla
