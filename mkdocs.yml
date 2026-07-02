@@ -1,5 +1,5 @@
-site_name: "Faun — распознавание видов птиц с аудиоловушек"
-site_description: "Техническая документация Faun v2: офлайн batch-pipeline распознавания видов птиц"
+site_name: "Faun — распознавание диких животных с аудиоловушек"
+site_description: "Техническая документация Faun v2: офлайн batch-pipeline распознавания видов животных (цель — скрытные млекопитающие, птицы — рабочий baseline)"
 site_url: "https://faun-forrest.duckdns.org:8080"
 
 theme:
@@ -38,6 +38,13 @@ nav:
   - Главная: index.md
   - Pipeline (v2): pipeline.md
   - Деплой: deployment.md
+  - "Знания и планы (2026-07-02)":
+    - Ответы на 12 вопросов: ОТВЕТЫ-НА-ВОПРОСЫ-2026-07-02.md
+    - Инвентарь данных: ДАННЫЕ-ИНВЕНТАРЬ.md
+    - Состояние проекта: СОСТОЯНИЕ-2026-07-02.md
+    - Брифинг для ML-специалиста: БРИФИНГ-ML.md
+    - План дальнейших действий: ПЛАН-ДАЛЬНЕЙШИХ-ДЕЙСТВИЙ.md
+    - "ADR-0010: маршрутизация p_bird": adr/ADR-0010-two-model-routing.md
   - "Legacy v1-hackathon":
     - Архитектура: architecture.md
     - ML Pipeline: ml-pipeline.md

@@ -1,13 +1,20 @@
-# Faun — офлайн batch-pipeline распознавания видов птиц
+# Faun — офлайн batch-pipeline распознавания диких животных по звуку
 
 ## Контекст
 
 Проект развернулся из хакатонного прототипа акустического мониторинга леса в
-**офлайн batch-pipeline распознавания ВИДОВ ПТИЦ** по записям с аудиоловушек.
+**офлайн batch-pipeline распознавания видов животных** по записям с аудиоловушек.
 Заказчик/партнёры: Yandex Cloud + Президентский фонд природы. Пилот стартует с июля.
 
+**Целевой объект — скрытные млекопитающие** (например, садовая соня, выхухоль), которых
+готовые птичьи классификаторы (BirdNET/Perch) не определяют — это и есть отличие продукта.
+**Птицы — уже работающий baseline**: Perch 2 в проде реально их распознаёт (см. Инфраструктуру
+ниже), но это не итоговая цель. Размеченного звука целевых млекопитающих сейчас нет нигде — ни
+в репозитории, ни на кластере, ни в открытых датасетах (детали и статус — `docs/БРИФИНГ-ML.md`,
+`docs/АУДИТ-2026-06-25.md`).
+
 **Продукт:** оператор загружает архив записей с ловушек (папка/URL) → система
-детектирует звуковые события, классифицирует виды птиц и отдаёт CSV с треками,
+детектирует звуковые события, классифицирует виды и отдаёт CSV с треками,
 таймкодами, видом и вероятностью. Плюс простой web-UI для запуска и скачивания.
 
 ## Архитектура (v2 pipeline)
@@ -39,7 +46,7 @@
 - `faun/api` — FastAPI: `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/results.csv`, `GET /jobs`, `GET /jobs/{id}/detections`, `GET /jobs/{id}/segments/{det}.wav`, `POST /jobs/{id}/detections/{det}/label` (flock read-modify-write), `GET /dashboard`, `GET /review`, `GET /healthz` (→ `faun.health.health`). `run_pipeline` пишет `detections.jsonl` + клипы `segments/<det>.wav` из ОРИГИНАЛА на исходной sr (CSV/sidecar — без изменений); чистит `job_dir/_source` в `finally` (disk-leak). Опц. **HTTP Basic Auth** — middleware на ВСЕХ роутах вкл. `/static`, кроме `/healthz` (env `FAUN_BASIC_USER`/`FAUN_BASIC_PASS`; обе пустые → ОТКРЫТО/default-open; `hmac.compare_digest`; 401+`WWW-Authenticate`). Валидация `lat/lon` (WGS84-границы, NaN/Inf→422) и длины меток.
 - `faun/cli` — `faun process <dir|URL|Я.Диск> [--out results.csv]`; `faun retrain --labels <csv> --model yamnet|perch|perch-v2 --out probe.pkl` (бэкбон пробы — любой embed-адаптер); `faun export-clips --job <dir> --out clips.zip`; `faun export-labels --job <dir> --out labels.csv` (детекции→retrain-CSV: только `is_ground_truth`-метки, **абсолютный** `segment_path` — закрывает петлю review→retrain); `faun batch-label --archive <dir|URL> --out <jsonl> [--emb-out npz] [--embedder perch|perch-v2|yamnet] [--models perch,birdnet]`; `faun fetch-dataset --root <iNatSounds>`; `faun eval-species --probe <pkl> --dataset <dir> [--embedder perch|perch-v2|yamnet] [--real]` (без `--real` число помечается SYNTHETIC); `faun finetune --dataset <iNatSounds> --out <ckpt_dir> [--model passt|ast|beats]` (РЕАЛЬНЫЙ fine-tune трансформера, только кластер-GPU). `process`/`batch-label` теперь принимают URL/Я.Диск (резолв в `faun.sources`).
 - `faun/static` — vanilla-JS UI, 3 окна (имена заморожены): `index.html` (загрузка/очередь), `dashboard.html` (Leaflet-карта ловушек + список job), `review.html` (детекции + аудиоплеер реального клипа + переразметка лесником); общие `app.js`/`styles.css`. Редизайн 2026-06-18: единый «лесной» визуальный стиль, общий header/footer, demo-facing для заказчика.
-- `deploy/` — артефакты деплоя v2: `Dockerfile` (slim, TF-free, Stub — **мгновенный откат**), **`Dockerfile.ml`** (TF-образ с РЕАЛЬНЫМ Perch 2: та же digest-база + `requirements-ml.txt` `tensorflow-cpu==2.20.0`+`kagglehub`, копирует `experiments/wrappers` для `_infer`, дефолт `FAUN_CLASSIFIER=perch-v2`+`PERCH_V2_MODEL_PATH=/models/perch2`; модель в томе `faun-models`, не в образе), `docker-compose.yml`, `README.md`. **Задеплоен** на кластер (`faun-api:2.2.0-ml-20260619`, см. Инфраструктуру); собирается на кластере (локально docker нет). `scripts/` — кластерные launch-скрипты: `train_inatsounds.sh`, `batch_label_raw180.sh` (one-command, для ручного запуска на cluster-alex), `extract_inatsounds_subset.py` (курируемый reserve-subset видов из `val.tar.gz`+`val.json`: чистая TF-free `select_targets` + потоковый scan tar → `root/<Genus_species>/<clip>`), `eval_inatsounds_perchv2.py` (честная **held-out** видовая метрика Perch 2: дизъюнктный split → проба на train → `species_eval(synthetic=False)` на val + apples-to-apples zero-shot baseline на тех же видах + деплой-проба на полном наборе; peak-norm serve-parity).
+- `deploy/` — артефакты деплоя v2: `Dockerfile` (slim, TF-free, Stub — **мгновенный откат**), **`Dockerfile.ml`** (TF-образ с РЕАЛЬНЫМ Perch 2: та же digest-база + `requirements-ml.txt` `tensorflow-cpu==2.20.0`+`kagglehub`, копирует `experiments/wrappers` для `_infer`, дефолт `FAUN_CLASSIFIER=perch-v2`+`PERCH_V2_MODEL_PATH=/models/perch2`; модель в томе `faun-models`, не в образе), `docker-compose.yml`, `README.md`. **Задеплоен** на кластер (текущий тег — `faun-api:2.3.0-ml-20260624`, см. Инфраструктуру); собирается на кластере (локально docker нет). `scripts/` — кластерные launch-скрипты: `train_inatsounds.sh`, `batch_label_raw180.sh` (one-command, для ручного запуска на cluster-alex), `extract_inatsounds_subset.py` (курируемый reserve-subset видов из `val.tar.gz`+`val.json`: чистая TF-free `select_targets` + потоковый scan tar → `root/<Genus_species>/<clip>`), `eval_inatsounds_perchv2.py` (честная **held-out** видовая метрика Perch 2: дизъюнктный split → проба на train → `species_eval(synthetic=False)` на val + apples-to-apples zero-shot baseline на тех же видах + деплой-проба на полном наборе; peak-norm serve-parity).
 - `faun/sources` — **P0-фикс**: слой резолва источника ПЕРЕД замороженным `ingest.scan`. `resolve_source(src, workdir)` (локальный путь / http(s)-zip / публичная шара Я.Диска, в т.ч. подпапка `…/d/<key>/A1` через `public_key`+`&path`, НЕ вклеивая её в ключ) → локальная папка; `source_provenance` → `results_meta.json`. Раньше `Path("https://…")` схлопывал `//`. Безопасность (merge-blocking): SSRF (резолв IP + блок private/loopback/link-local/CGNAT `100.64/10` = tailnet кластера; ручной обход редиректов с проверкой каждого хопа ДО запроса), zip-bomb (счётчик при распаковке), zip-slip, size-cap в потоке, удаление zip+`_source/`. Env `FAUN_SOURCE_{TIMEOUT_S,MAX_BYTES,MAX_UNCOMPRESSED_BYTES,MAX_ENTRIES,MAX_REDIRECTS}` (дефолты под ~23 ГБ Я.Диск-папки).
 - `faun/settings` — `Settings`(frozen) + `get_settings()` (кэш, `cache_clear()` в тестах): единый типизированный конфиг, **читается через `get_settings()`** в `api`/`sources`/адаптерах(`perch`/`perch_v2`/`yamnet`)/`health`; +`basic_user`/`basic_pass` (Basic Auth, verbatim-чтение через `_env_secret_opt`), +`perch_v2_probe_path` (`PERCH_V2_PROBE_PATH`, для `PerchProbeAdapter`). source-лимиты enforce-ит `faun.sources` (uncompressed-cap — через `_int_env` с дефолтом из settings, чтобы env-override и zip-bomb-тест работали). `faun/obs` — `setup_logging(json)` + `with_job_context(job_id)` (структурные JSON-логи, stdlib).
 - `faun/training` — РЕАЛЬНЫЙ PyTorch fine-tune аудиотрансформера на iNatSounds (vs замороженная проба в `retraining`): `iNatTorchDataset`/`make_loaders`, `build_backbone` (PaSST 768 по умолчанию / AST / BEATs / numpy-стаб), `SpeciesHead`, `finetune(...)` (freeze→unfreeze, grad-accum, AMP, class-weight, early-stop, чекпойнт+resume), `save/load_checkpoint`. Контрол-флоу тестируется БЕЗ torch (numpy-стаб + инъекция `_backbone`/`_loaders`) + один реальный fwd/bwd под `requires_torch`. **Ни одного module-level `import torch`.** Тяжёлое — `requirements-train.txt` (lazy, кластер `faun-ml-torch`); запуск — `scripts/finetune_inatsounds.sh`, дока — `docs/finetuning.md`.
@@ -70,13 +77,14 @@ real-time мониторинг, YAMNet-голова, TDOA-триангуляци
 
 ## Инфраструктура
 
-- Ingress (с 2026-06-18, обновлено 2026-06-19): `faun.antopkin.ru/` → nginx `anchor`
-  (контейнер `delphi-press-nginx-1`) → tailnet `100.64.0.1:8010` = **v2-pipeline** (контейнер
-  `faun-api`, образ **`faun-api:2.2.0-ml-20260619`**, `FAUN_CLASSIFIER=perch-v2` = **РЕАЛЬНОЕ
+- Ingress (с 2026-06-18, обновлено 2026-06-19, актуализировано 2026-06-24): `faun.antopkin.ru/` → nginx
+  `anchor` (контейнер `delphi-press-nginx-1`) → tailnet `100.64.0.1:8010` = **v2-pipeline** (контейнер
+  `faun-api`, образ **`faun-api:2.3.0-ml-20260624`**, `FAUN_CLASSIFIER=perch-v2` = **РЕАЛЬНОЕ
   распознавание видов Perch 2**, не stub; модель в томе `faun-models:/models/perch2`; **HTTP Basic
-  Auth ВКЛ**, user=`faun`, кроме `/healthz`). Откат — slim-stub-образ `faun-api:2.1.0-20260619`
-  (на диске; `docker run` без `-e FAUN_CLASSIFIER=perch-v2` → Stub). Демо v1-hackathon
-  переехало на `faun.antopkin.ru/v1/` → `100.64.0.1:8003` (`/ws` оставлен в корне для live-аудио).
+  Auth ВКЛ**, user=`faun`, кроме `/healthz`). Откат — предыдущий контейнер `faun-api-prev-2.2.0`
+  (припаркован stopped: `docker start faun-api-prev-2.2.0`; образ `faun-api:2.2.0-ml-20260619` цел
+  на диске). Демо v1-hackathon переехало на `faun.antopkin.ru/v1/` → `100.64.0.1:8003` (`/ws` оставлен
+  в корне для live-аудио).
 - Авто-деплой ОТКЛЮЧЁН: старый VPS (`213.165.220.144`, delphi-press) удалён
   2026-05-30; `deploy.yml` — заглушка `workflow_dispatch`. CI/CD на кластер —
   июльская задача (GHA-раннеры не видят tailnet).
