@@ -45,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     export.add_argument("--job", required=True, help="job dir with detections.jsonl")
     export.add_argument("--out", required=True, help="output ZIP path")
+    export.add_argument(
+        "--only-candidates",
+        action="store_true",
+        help="worksheet mode: bundle ONLY routing-rejected detections "
+        "(status=rejected) with an empty corrected_species cell for a ranger",
+    )
 
     exlabels = sub.add_parser(
         "export-labels",
@@ -62,6 +68,21 @@ def main(argv: list[str] | None = None) -> int:
     exraven.add_argument("--job", required=True, help="job dir with detections.jsonl")
     exraven.add_argument(
         "--out", required=True, help="output Raven selection table (.txt, TSV)"
+    )
+
+    implabels = sub.add_parser(
+        "import-labels",
+        help="import a filled ranger worksheet CSV back into a job's detections.jsonl",
+    )
+    implabels.add_argument(
+        "--csv",
+        required=True,
+        help="filled worksheet CSV (from `export-clips --only-candidates`)",
+    )
+    implabels.add_argument(
+        "--jobs-root",
+        required=True,
+        help="jobs root holding <job_id>/detections.jsonl",
     )
 
     blabel = sub.add_parser(
@@ -195,13 +216,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "export-clips":
-        return _export_clips(Path(args.job), Path(args.out))
+        return _export_clips(
+            Path(args.job), Path(args.out), only_candidates=args.only_candidates
+        )
 
     if args.command == "export-labels":
         return _export_labels(Path(args.job), Path(args.out))
 
     if args.command == "export-raven":
         return _export_raven(Path(args.job), Path(args.out))
+
+    if args.command == "import-labels":
+        return _import_labels(Path(args.csv), Path(args.jobs_root))
 
     if args.command == "batch-label":
         return _batch_label(args)
@@ -218,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
-def _export_clips(job_dir: Path, out_path: Path) -> int:
+def _export_clips(job_dir: Path, out_path: Path, only_candidates: bool = False) -> int:
     """Bundle each detection's real .wav clip plus an index CSV into a ZIP.
 
     Reads ``<job_dir>/detections.jsonl`` (one JSON object per line, parsed
@@ -226,6 +252,13 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
     and writes ``out_path`` containing every existing ``segment_path`` clip and
     a ``clips_index.csv`` summarising the top label per detection. This is the
     ornithologist hand-off: real audio clips, never spectrograms.
+
+    ``only_candidates`` switches to WORKSHEET mode: keep only routing-rejected
+    detections (any label ``status == "rejected"`` — "not a bird -> maybe a
+    target mammal") and emit a wider index with empty ``corrected_species`` and
+    ``notes`` cells plus a ``job_id`` column, so a ranger can fill species and
+    the row can be routed straight back by ``faun import-labels``. The default
+    path is byte-unchanged.
     """
     import csv
     import io
@@ -240,10 +273,34 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
             if line:
                 detections.append(json.loads(line))
 
-    index = io.StringIO()
-    writer = csv.writer(index)
-    writer.writerow(
-        [
+    if only_candidates:
+        # Constant imported only here so the default path stays import-free.
+        from faun.detections import STATUS_REJECTED
+
+        detections = [
+            det
+            for det in detections
+            if any(
+                (lbl.get("status") == STATUS_REJECTED)
+                for lbl in det.get("labels") or []
+            )
+        ]
+        job_id = job_dir.resolve().name
+        header = [
+            "detection_id",
+            "job_id",
+            "trap_id",
+            "source_file",
+            "start_sec",
+            "duration_sec",
+            "suggested_species",
+            "suggested_source",
+            "suggested_probability",
+            "corrected_species",
+            "notes",
+        ]
+    else:
+        header = [
             "detection_id",
             "trap_id",
             "source_file",
@@ -253,7 +310,10 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
             "suggested_source",
             "suggested_probability",
         ]
-    )
+
+    index = io.StringIO()
+    writer = csv.writer(index)
+    writer.writerow(header)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -261,18 +321,35 @@ def _export_clips(job_dir: Path, out_path: Path) -> int:
             segment = det.get("segment") or {}
             labels = det.get("labels") or []
             top = labels[0] if labels else {}
-            writer.writerow(
-                [
-                    det.get("detection_id", ""),
-                    det.get("trap_id", ""),
-                    det.get("source_file", ""),
-                    segment.get("start_s", ""),
-                    segment.get("duration_s", ""),
-                    top.get("species", ""),
-                    top.get("source", ""),
-                    top.get("probability", ""),
-                ]
-            )
+            if only_candidates:
+                writer.writerow(
+                    [
+                        det.get("detection_id", ""),
+                        job_id,
+                        det.get("trap_id", ""),
+                        det.get("source_file", ""),
+                        segment.get("start_s", ""),
+                        segment.get("duration_s", ""),
+                        top.get("species", ""),
+                        top.get("source", ""),
+                        top.get("probability", ""),
+                        "",  # corrected_species — filled by the ranger
+                        "",  # notes
+                    ]
+                )
+            else:
+                writer.writerow(
+                    [
+                        det.get("detection_id", ""),
+                        det.get("trap_id", ""),
+                        det.get("source_file", ""),
+                        segment.get("start_s", ""),
+                        segment.get("duration_s", ""),
+                        top.get("species", ""),
+                        top.get("source", ""),
+                        top.get("probability", ""),
+                    ]
+                )
             seg_path = det.get("segment_path")
             if seg_path:
                 clip = job_dir / seg_path
@@ -423,6 +500,124 @@ def _export_labels(job_dir: Path, out_path: Path) -> int:
         writer.writerows(rows)
 
     print(f"{out_path} ({len(rows)} ground-truth label(s))")
+    return 0
+
+
+def _import_labels(csv_path: Path, jobs_root: Path) -> int:
+    """Import a filled ranger worksheet CSV back into jobs' detections.jsonl.
+
+    The reverse of ``export-clips --only-candidates``: each row whose
+    ``corrected_species`` is non-blank becomes a ranger ground-truth label
+    (``source=operator:ranger``, ``status=corrected``) appended to the matching
+    detection — the SAME write path as the review UI's ``add_label`` endpoint, so
+    the label immediately passes ``is_ground_truth`` and flows to
+    ``export-labels`` -> ``retrain``. Read-modify-write of each job's
+    detections.jsonl is guarded by an ``fcntl.flock`` on its ``.detections.lock``
+    (one lock per job), mirroring ``faun.api.add_label``.
+
+    Idempotent: a row is skipped if the detection already carries a ranger
+    ``corrected`` label with the same species. Robust: a bad row or job warns to
+    stderr and is skipped; the rest still apply.
+    """
+    import csv
+    import fcntl
+
+    from faun.detections import (
+        SOURCE_RANGER,
+        STATUS_CORRECTED,
+        Label,
+        read_detections,
+        write_detections,
+    )
+
+    applied = noop = missing_job = missing_det = skipped_blank = 0
+
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        rows_by_job: dict[str, list[tuple[str, str]]] = {}
+        for row in reader:
+            corrected = (row.get("corrected_species") or "").strip()
+            if not corrected:
+                skipped_blank += 1
+                continue
+            job_id = (row.get("job_id") or "").strip()
+            det_id = (row.get("detection_id") or "").strip()
+            if not job_id:
+                print(
+                    f"warning: row for detection {det_id or '?'} has no job_id; skipping",
+                    file=sys.stderr,
+                )
+                missing_job += 1
+                continue
+            if not det_id:
+                print(
+                    f"warning: row in job {job_id} has no detection_id; skipping",
+                    file=sys.stderr,
+                )
+                missing_det += 1
+                continue
+            rows_by_job.setdefault(job_id, []).append((det_id, corrected))
+
+    for job_id, items in rows_by_job.items():
+        try:
+            job_dir = jobs_root / job_id
+            jsonl = job_dir / "detections.jsonl"
+            if not jsonl.exists():
+                print(
+                    f"warning: no detections.jsonl for job {job_id}; "
+                    f"skipping {len(items)} row(s)",
+                    file=sys.stderr,
+                )
+                missing_job += len(items)
+                continue
+            lock_path = job_dir / ".detections.lock"
+            with open(lock_path, "w") as lock_fh:
+                fcntl.flock(lock_fh, fcntl.LOCK_EX)
+                try:
+                    dets = read_detections(jsonl)
+                    by_id = {d.detection_id: d for d in dets}
+                    changed = False
+                    for det_id, corrected in items:
+                        target = by_id.get(det_id)
+                        if target is None:
+                            print(
+                                f"warning: detection {det_id} not in job {job_id}; "
+                                f"skipping",
+                                file=sys.stderr,
+                            )
+                            missing_det += 1
+                            continue
+                        already = any(
+                            lbl.source == SOURCE_RANGER
+                            and lbl.status == STATUS_CORRECTED
+                            and lbl.species == corrected
+                            for lbl in target.labels
+                        )
+                        if already:
+                            noop += 1
+                            continue
+                        target.labels.append(
+                            Label.now(
+                                species=corrected,
+                                probability=None,
+                                source=SOURCE_RANGER,
+                                status=STATUS_CORRECTED,
+                            )
+                        )
+                        applied += 1
+                        changed = True
+                    if changed:
+                        write_detections(jsonl, dets)
+                finally:
+                    fcntl.flock(lock_fh, fcntl.LOCK_UN)
+        except Exception as exc:  # noqa: BLE001 — one bad job must not abort import
+            print(f"warning: job {job_id}: {exc}", file=sys.stderr)
+            continue
+
+    print(
+        f"applied={applied} noop={noop} missing_job={missing_job} "
+        f"missing_det={missing_det} skipped_blank={skipped_blank}"
+    )
     return 0
 
 
