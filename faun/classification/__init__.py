@@ -27,6 +27,7 @@ __all__ = [
     "Perch2Adapter",
     "PerchProbeAdapter",
     "MaskedClassifier",
+    "RoutingClassifier",
     "load_allowlist",
     "RESERVE_CHECKLIST_PATH",
 ]
@@ -226,7 +227,31 @@ class MaskedClassifier:
 
     def classify(self, segment, sr) -> list[Prediction]:
         """Classify via the inner model, then keep only allow-listed species."""
-        preds = self.inner.classify(segment, sr)
+        return self._apply_mask(self.inner.classify(segment, sr))
+
+    def classify_with_status(self, segment, sr) -> tuple[list[Prediction], str]:
+        """Filter allow-listed species while preserving the inner routing status.
+
+        When the wrapped classifier routes (exposes ``classify_with_status``) its
+        STATUS_PSEUDO/STATUS_REJECTED decision survives the mask; otherwise the
+        status defaults to STATUS_PSEUDO. The allow-list filters species only — it
+        never changes the routing decision.
+        """
+        from faun.detections import STATUS_PSEUDO
+
+        route = getattr(self.inner, "classify_with_status", None)
+        if route is not None:
+            preds, status = route(segment, sr)
+        else:
+            preds, status = self.inner.classify(segment, sr), STATUS_PSEUDO
+        return self._apply_mask(preds), status
+
+    def _apply_mask(self, preds: list[Prediction]) -> list[Prediction]:
+        """One-time coverage gate, then keep only allow-listed species.
+
+        Identical filtering + ``masked_out`` logging to the pre-routing
+        ``classify`` (kept byte-identical by construction).
+        """
         if not self._ensure_active():
             return preds
         kept: list[Prediction] = []
@@ -292,3 +317,34 @@ class MaskedClassifier:
             )
             return None
         return list(vocab) if vocab else None
+
+
+class RoutingClassifier:
+    """Two-model routing wrapper (FR-R1/FR-R2), additive and OFF by default.
+
+    Wraps any classifier. If the inner exposes ``classify_with_routing`` (Perch 2)
+    it computes ``p_bird`` from the inner's own logits and marks the labels
+    STATUS_REJECTED when ``p_bird < tau_bird`` — "not a bird, send to the
+    mammal/noise queue". Fail-open: ``p_bird is None`` (mask asset missing) or an
+    inner that cannot route ⇒ STATUS_PSEUDO. Exposes ``.inner`` so the source-tag
+    unwrap in ``faun.api._classifier_source`` still resolves ``model:perch-v2``.
+    """
+
+    def __init__(self, inner, *, tau_bird: float) -> None:
+        self.inner = inner
+        self.tau_bird = tau_bird
+
+    def classify(self, segment, sr) -> list[Prediction]:
+        return self.classify_with_status(segment, sr)[0]
+
+    def classify_with_status(self, segment, sr) -> tuple[list[Prediction], str]:
+        from faun.detections import STATUS_PSEUDO, STATUS_REJECTED
+
+        route = getattr(self.inner, "classify_with_routing", None)
+        if route is None:
+            return self.inner.classify(segment, sr), STATUS_PSEUDO
+        result = route(segment, sr)
+        status = STATUS_PSEUDO
+        if result.p_bird is not None and result.p_bird < self.tau_bird:
+            status = STATUS_REJECTED
+        return list(result.predictions), status
