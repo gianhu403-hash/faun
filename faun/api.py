@@ -130,7 +130,13 @@ def _allowlist_vocab_provider(clf):
     rest the mask cannot verify coverage and stays a no-op (fail-open). Reads the
     adapter's own (lazy) label source — resolved only after the first inference,
     which is exactly when the coverage gate runs.
+
+    Unwraps any routing/mask wrapper first (``.inner``) so the vocabulary is read
+    from the REAL adapter, not the wrapper class name (mirrors the unwrap idiom in
+    ``_classifier_source``).
     """
+    while hasattr(clf, "inner"):
+        clf = clf.inner
     name = clf.__class__.__name__
     if name == "Perch2Adapter":
         return clf._load_labels
@@ -146,16 +152,20 @@ def _allowlist_vocab_provider(clf):
 
 
 def _build_classifier():
-    """Build the serving classifier, applying the regional allow-list if set.
+    """Build the serving classifier: base → optional routing → optional allow-list.
 
-    When ``FAUN_SPECIES_ALLOWLIST`` is configured (and yields a non-empty
-    checklist), the base classifier is wrapped in a
-    :class:`~faun.classification.MaskedClassifier` so the argmax is restricted to
-    regional species (ADR-0004). UNSET -> the bare classifier is returned and the
-    output is byte-for-byte unchanged (the default, prod-safe path).
+    Both wrappers are additive and OFF by default. ``FAUN_ROUTING_ENABLED`` unset
+    → no RoutingClassifier; ``FAUN_SPECIES_ALLOWLIST`` unset → no MaskedClassifier;
+    with both unset the bare adapter is returned and output is byte-for-byte
+    unchanged (the default, prod-safe path).
     """
     base = _build_base_classifier()
-    spec = get_settings().species_allowlist
+    settings = get_settings()
+    if settings.routing_enabled:
+        from faun.classification import RoutingClassifier
+
+        base = RoutingClassifier(base, tau_bird=settings.routing_tau_bird)
+    spec = settings.species_allowlist
     if not spec:
         return base
     from faun.classification import MaskedClassifier, load_allowlist
@@ -270,9 +280,17 @@ def run_pipeline(
             return sf.read(path, dtype="float64", always_2d=False)
 
         def _build_labels(clip_16k):
+            route = getattr(classifier, "classify_with_status", None)
+            if route is not None:
+                preds, status = route(clip_16k, pl.CLASSIFY_SR)
+            else:
+                preds, status = (
+                    classifier.classify(clip_16k, pl.CLASSIFY_SR),
+                    STATUS_PSEUDO,
+                )
             return [
-                Label.from_prediction(pred, source=source, status=STATUS_PSEUDO)
-                for pred in classifier.classify(clip_16k, pl.CLASSIFY_SR)
+                Label.from_prediction(pred, source=source, status=status)
+                for pred in preds
             ]
 
         # run_batch yields one (Detection, clip) at a time, so we write each clip

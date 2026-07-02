@@ -47,6 +47,8 @@ Defaults (match the values faun.sources actually enforces):
     presence_gate_k           ``0.0``         (FAUN_PRESENCE_GATE_K)
     perch_v2_calibrator_path  ``None``        (PERCH_V2_CALIBRATOR_PATH)
     prob_smoothing            ``False``       (FAUN_PROB_SMOOTHING)
+    routing_enabled           ``False``       (FAUN_ROUTING_ENABLED)
+    routing_tau_bird          ``0.5``         (FAUN_ROUTING_TAU_BIRD)
 """
 
 from __future__ import annotations
@@ -77,6 +79,11 @@ DEFAULT_MAX_UNCOMPRESSED_BYTES = 60 * 1024**3  # 60 GiB extracted (zip-bomb) cap
 DEFAULT_MAX_ENTRIES = 100_000  # archive member cap
 DEFAULT_MAX_REDIRECTS = 5  # SSRF redirect cap
 DEFAULT_LOG_JSON = True
+
+#: Routing p_bird decision threshold (FR-R1). Consulted ONLY when
+#: FAUN_ROUTING_ENABLED is on. Placeholder 0.5 — calibrate with
+#: scripts/calibrate_routing.py against real bird vs noise clips before enabling.
+DEFAULT_ROUTING_TAU_BIRD = 0.5
 
 #: Values accepted as boolean true / false for FAUN_LOG_JSON. Anything else
 #: (including the empty string) falls back to the field default.
@@ -234,6 +241,13 @@ class Settings:
     # probability, results.csv and detections.jsonl are never touched.
     prob_smoothing: bool = False
 
+    # Two-model routing (FR-R1/FR-R2, Wave 2). OFF by default: when
+    # routing_enabled is False no RoutingClassifier is built and output is
+    # unchanged. routing_tau_bird is consulted ONLY when enabled; parsed with
+    # positive=False since a 0.0 threshold is a valid (never-reject) config.
+    routing_enabled: bool = False
+    routing_tau_bird: float = DEFAULT_ROUTING_TAU_BIRD
+
     # Observability.
     log_json: bool = DEFAULT_LOG_JSON
 
@@ -274,6 +288,10 @@ class Settings:
             presence_gate_k=_env_float("FAUN_PRESENCE_GATE_K", 0.0, positive=False),
             perch_v2_calibrator_path=_env_path_opt("PERCH_V2_CALIBRATOR_PATH"),
             prob_smoothing=_env_bool("FAUN_PROB_SMOOTHING", False),
+            routing_enabled=_env_bool("FAUN_ROUTING_ENABLED", False),
+            routing_tau_bird=_env_float(
+                "FAUN_ROUTING_TAU_BIRD", DEFAULT_ROUTING_TAU_BIRD, positive=False
+            ),
             log_json=_env_bool("FAUN_LOG_JSON", DEFAULT_LOG_JSON),
         )
 

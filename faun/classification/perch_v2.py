@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -116,6 +117,22 @@ def apply_presence_gate(p_species: float, p_bird: float, k: float) -> float:
     this function (it returns the raw logit unchanged), see ``classify``.
     """
     return float(min(1.0, max(0.0, p_species * (1.0 + p_bird * k))))
+
+
+@dataclass(frozen=True)
+class RoutingResult:
+    """Two-model routing signal derived from ONE Perch 2 inference (FR-R1).
+
+    ``predictions`` is exactly what ``classify`` would return for the same
+    scores. ``p_bird`` is the softmax mass on bird classes (``bird_presence_mass``);
+    ``None`` means the eBird-class asset is missing/mismatched, so routing cannot
+    decide and MUST fail open (caller keeps STATUS_PSEUDO). ``non_bird_top`` is the
+    highest-scoring NON-bird class ``(label, logit)`` for triage, or ``None``.
+    """
+
+    predictions: list[Prediction]
+    p_bird: float | None
+    non_bird_top: tuple[str, float] | None
 
 
 #: Kaggle model handles. GPU handle is the default; the *_cpu variant is the
@@ -466,6 +483,16 @@ class Perch2Adapter:
         """
         logits, _embedding = self._infer(segment, sr)
         scores = logits[0] if logits.ndim > 1 else logits
+        return self._predictions_from_scores(scores)
+
+    def _predictions_from_scores(self, scores: np.ndarray) -> list[Prediction]:
+        """Build ranked predictions from a 1-D logit vector.
+
+        Shared by ``classify`` and ``classify_with_routing`` — one inference, one
+        code path, so both agree byte-for-byte. Contains the exact score->
+        predictions logic (label load + off-by-one guard, argsort top-k,
+        presence-gate ``_prob``, serve-time calibrator, Prediction build).
+        """
         labels = self._load_labels()
         # Fail-safe against a silent off-by-one: the label list MUST be 1:1 with
         # the logits. If a future asset layout breaks that (e.g. an un-dropped
@@ -533,3 +560,47 @@ class Perch2Adapter:
             Prediction(_name(int(i)), _prob(int(i)), prob_calibrated=_calib(int(i)))
             for i in order
         ]
+
+    def classify_with_routing(self, segment: np.ndarray, sr: int) -> RoutingResult:
+        """Classify AND compute the routing ``p_bird`` from the SAME inference.
+
+        One ``_infer`` call — never double-infer. Predictions are identical to
+        ``classify`` for the same scores. If the bird mask is missing or its
+        length disagrees with the logits, ``p_bird``/``non_bird_top`` are ``None``
+        (fail-open: the caller must NOT reject).
+
+        Raises:
+            RuntimeError: if TensorFlow is unavailable at call time.
+        """
+        logits, _embedding = self._infer(segment, sr)
+        scores = logits[0] if logits.ndim > 1 else logits
+        preds = self._predictions_from_scores(scores)
+
+        mask = self._load_bird_mask()
+        if mask is None or len(mask) != len(scores):
+            if mask is not None:
+                logger.warning(
+                    "Perch 2 bird-mask length (%d) != logit count (%d); routing "
+                    "disabled for this segment (fail-open)",
+                    len(mask),
+                    len(scores),
+                )
+            return RoutingResult(preds, None, None)
+
+        p_bird = bird_presence_mass(scores, mask)
+
+        non_bird_top = None
+        non_bird_idx = np.where(~mask)[0]
+        if non_bird_idx.size:
+            j = int(non_bird_idx[int(np.argmax(scores[non_bird_idx]))])
+            labels = self._load_labels()
+            if labels is not None and len(labels) != len(scores):
+                labels = None
+            name = (
+                labels[j]
+                if (labels is not None and j < len(labels))
+                else f"species_{j}"
+            )
+            non_bird_top = (name, float(scores[j]))
+
+        return RoutingResult(preds, p_bird, non_bird_top)
